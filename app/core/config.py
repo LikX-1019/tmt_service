@@ -1,4 +1,4 @@
-"""Application configuration loaded from environment variables."""
+"""应用配置模块，统一从环境变量和项目根目录的 .env 文件加载配置。"""
 
 from functools import lru_cache
 from pathlib import Path
@@ -13,7 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
-    """Typed configuration shared by the application."""
+    """集中定义应用共享的强类型配置，并负责基础格式校验。"""
 
     model_config = SettingsConfigDict(
         env_file=PROJECT_ROOT / ".env",
@@ -23,12 +23,24 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
-    app_name: str = "customer-service-agent"
+    app_name: str = "Customer Service Agent"
     app_env: str = "local"
-    app_debug: bool = False
-    app_host: str = "0.0.0.0"
-    app_port: int = Field(default=8000, ge=1, le=65535)
+    app_debug: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("APP_DEBUG", "DEBUG"),
+    )
+    app_host: str = Field(
+        default="0.0.0.0",
+        validation_alias=AliasChoices("APP_HOST", "HOST"),
+    )
+    app_port: int = Field(
+        default=8000,
+        ge=1,
+        le=65535,
+        validation_alias=AliasChoices("APP_PORT", "PORT"),
+    )
     log_level: str = "INFO"
+    log_dir: Path = PROJECT_ROOT / "logs"
     default_tenant_id: str = "tenant_default"
 
     mysql_host: str = "127.0.0.1"
@@ -69,6 +81,7 @@ class Settings(BaseSettings):
         ),
     )
     llm_model_routes: dict[str, str] = Field(default_factory=dict)
+    llm_temperature: float = Field(default=0.2, ge=0, le=2)
     llm_timeout_seconds: float = Field(default=120.0, gt=0)
     llm_max_retries: int = Field(default=2, ge=0)
     llm_structured_output_method: str = "function_calling"
@@ -79,15 +92,24 @@ class Settings(BaseSettings):
     @field_validator("log_level")
     @classmethod
     def normalize_log_level(cls, value: str) -> str:
+        """将日志级别统一为大写，并拒绝 logging 不支持的级别。"""
         level = value.strip().upper()
         allowed = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"}
         if level not in allowed:
             raise ValueError(f"log_level must be one of {sorted(allowed)}")
         return level
 
+    @field_validator("log_dir")
+    @classmethod
+    def resolve_log_dir(cls, value: Path) -> Path:
+        """将相对日志目录固定到项目根目录，避免受启动目录影响。"""
+        value = value.expanduser()
+        return value if value.is_absolute() else PROJECT_ROOT / value
+
     @field_validator("llm_provider", "llm_model")
     @classmethod
     def reject_blank_llm_values(cls, value: str) -> str:
+        """清理模型配置两端空白，并禁止空的提供商或模型名称。"""
         value = value.strip()
         if not value:
             raise ValueError("value must not be blank")
@@ -96,6 +118,7 @@ class Settings(BaseSettings):
     @field_validator("llm_base_url")
     @classmethod
     def normalize_base_url(cls, value: str | None) -> str | None:
+        """规范模型服务地址；空字符串表示使用 SDK 默认地址。"""
         if value is None:
             return None
         value = value.strip().rstrip("/")
@@ -104,6 +127,7 @@ class Settings(BaseSettings):
     @field_validator("llm_model_routes")
     @classmethod
     def reject_blank_routes(cls, value: dict[str, str]) -> dict[str, str]:
+        """规范场景模型路由，避免空键或空模型名进入运行阶段。"""
         routes: dict[str, str] = {}
         for agent_type, model in value.items():
             agent_type = agent_type.strip().lower()
@@ -115,7 +139,7 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
-        """SQLAlchemy async URL with credentials safely escaped."""
+        """生成已安全转义账号密码的 SQLAlchemy 异步连接地址。"""
         user = quote_plus(self.mysql_user)
         password = quote_plus(self.mysql_password.get_secret_value())
         database = quote_plus(self.mysql_database)
@@ -126,16 +150,18 @@ class Settings(BaseSettings):
 
     @property
     def redis_url(self) -> str:
+        """生成已安全转义密码的 Redis 连接地址。"""
         password = self.redis_password.get_secret_value()
         auth = f":{quote_plus(password)}@" if password else ""
         return f"redis://{auth}{self.redis_host}:{self.redis_port}/{self.redis_db}"
 
     @property
     def milvus_uri(self) -> str:
+        """生成 Milvus HTTP 连接地址。"""
         return f"http://{self.milvus_host}:{self.milvus_port}"
 
     def require_llm_api_key(self) -> str:
-        """Return the API key or fail when an LLM is first requested."""
+        """首次创建模型时返回 API Key；未配置时立即给出明确错误。"""
         api_key = self.llm_api_key.get_secret_value() if self.llm_api_key else ""
         if not api_key.strip():
             raise ValueError(
@@ -145,23 +171,27 @@ class Settings(BaseSettings):
         return api_key
 
     def model_for(self, agent_type: str) -> str:
+        """返回指定业务场景的模型，未单独配置时回退到默认模型。"""
         return self.llm_model_routes.get(agent_type.lower(), self.llm_model)
 
     def safe_summary(self) -> dict[str, Any]:
-        """Return non-secret fields suitable for startup diagnostics."""
+        """返回可用于启动诊断的非敏感配置，确保不会泄露密钥。"""
         return {
             "app_env": self.app_env,
             "app_debug": self.app_debug,
+            "log_level": self.log_level,
+            "log_dir": str(self.log_dir),
             "mysql_host": self.mysql_host,
             "redis_host": self.redis_host,
             "milvus_uri": self.milvus_uri,
             "llm_provider": self.llm_provider,
             "llm_base_url": self.llm_base_url,
             "llm_model": self.llm_model,
+            "llm_temperature": self.llm_temperature,
         }
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Return the process-wide settings instance."""
+    """返回进程级缓存配置，避免在每次请求中重复读取环境变量。"""
     return Settings()

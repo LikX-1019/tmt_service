@@ -4,6 +4,7 @@ import pytest
 from pydantic import BaseModel, SecretStr
 
 from app.core.config import Settings
+from app.core.exceptions import UnsupportedLLMProviderError
 from app.factories import llm_factory
 from app.factories.llm_factory import LLMFactory
 
@@ -98,3 +99,29 @@ def test_missing_api_key_has_actionable_error(
 
     with pytest.raises(ValueError, match="LLM_API_KEY"):
         LLMFactory.get_llm("response")
+
+
+def test_create_accepts_model_and_temperature_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(LLMFactory, "_get_settings", staticmethod(make_settings))
+    monkeypatch.setattr(
+        llm_factory,
+        "_init_chat_model",
+        lambda **kwargs: FakeChatModel(kwargs),
+    )
+
+    model = LLMFactory.create(model="override-model", temperature=0.6)
+
+    assert model.kwargs["model"] == "override-model"
+    assert model.kwargs["temperature"] == 0.6
+
+
+def test_unsupported_provider_uses_domain_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = make_settings().model_copy(update={"llm_provider": "unknown"})
+    monkeypatch.setattr(LLMFactory, "_get_settings", staticmethod(lambda: settings))
+
+    with pytest.raises(UnsupportedLLMProviderError):
+        LLMFactory.create()
