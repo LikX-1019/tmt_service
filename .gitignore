@@ -1,0 +1,63 @@
+# Local secrets and environment overrides
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python bytecode, caches and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.venv/
+venv/
+env/
+
+# Python packaging/build output
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# IDE and operating-system files
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs, temporary files and local tool output
+*.log
+*.tmp
+*.temp
+*.bak
+.codex-tmp/
+outputs/
+
+# Local databases and Docker persistent data
+*.db
+*.sqlite
+*.sqlite3
+data/docker/
+data/backup/
+
+# Generated spreadsheet inspection artifacts
+*.inspect.ndjson
+
+# Downloaded model weights and caches (restore separately)
+model/
+.cache/
+
+# Test/runtime artifacts
+.hypothesis/
+.ipynb_checkpoints/
