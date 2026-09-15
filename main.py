@@ -4,8 +4,10 @@ from fastapi import FastAPI
 
 from app.api.router import api_router
 from app.api.v1.health import router as health_router
+from app.api.web import router as web_router
 from app.core.config import get_settings
 from app.core.exception_handlers import register_exception_handlers
+from app.core.lifecycle import lifespan
 from app.core.logging import configure_logging
 from app.middleware.logging import RequestLoggingMiddleware
 from app.middleware.request_id import RequestIdMiddleware
@@ -19,8 +21,10 @@ def create_app() -> FastAPI:
         title=settings.app_name,
         debug=settings.app_debug,
         version="0.1.0",
+        lifespan=lifespan,
     )
     register_exception_handlers(application)
+    application.include_router(web_router)
     application.include_router(health_router)
     application.include_router(api_router)
 

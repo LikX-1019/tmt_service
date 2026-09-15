@@ -43,3 +43,19 @@ class InvalidRequestError(AppException):
     code = "INVALID_REQUEST"
     default_message = "请求参数无效"
     status_code = 400
+
+
+class ConsoleUnavailableError(AppException):
+    """控制台数据库或浏览器连接器不可用。"""
+
+    code = "CONSOLE_UNAVAILABLE"
+    default_message = "客服控制台暂时不可用"
+    status_code = 503
+
+
+class ResourceNotFoundError(AppException):
+    """请求的店铺、会话或任务不存在。"""
+
+    code = "RESOURCE_NOT_FOUND"
+    default_message = "请求的资源不存在"
+    status_code = 404

@@ -3,19 +3,31 @@ name = "customer-service-agent"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
+    "alembic>=1.14,<2",
+    "aiomysql>=0.2,<1",
+    "cryptography>=43,<48",
     "fastapi>=0.115,<1",
     "httpx>=0.27,<1",
+    "jieba>=0.42,<1",
     "langchain>=1.0,<2",
     "langchain-openai>=1.0,<2",
+    "openpyxl>=3.1,<4",
+    "playwright>=1.49,<2",
     "pydantic>=2.10,<3",
     "pydantic-settings>=2.7,<3",
+    "pymilvus>=2.5,<3",
+    "rank-bm25>=0.2,<1",
+    "sentence-transformers>=3,<6",
+    "sqlalchemy[asyncio]>=2,<3",
     "uvicorn[standard]>=0.34,<1",
 ]
 
 [project.optional-dependencies]
 dev = [
+    "aiosqlite>=0.20,<1",
     "pytest>=8,<9",
     "pytest-asyncio>=0.24,<2",
+    "ruff>=0.12,<0.16",
 ]
 
 [build-system]
@@ -24,6 +36,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 py-modules = ["main"]
+
+[tool.setuptools.package-data]
+app = ["web/*.html", "web/console/*.html", "web/console/*.css", "web/console/*.js"]
 
 [tool.setuptools.packages.find]
 include = ["app*"]

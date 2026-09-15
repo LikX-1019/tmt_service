@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -50,7 +51,9 @@ class ChatService:
             },
         )
         try:
-            llm = self._llm or LLMFactory.create()
+            # 首次导入模型 SDK 在部分 Windows 环境中较慢，放到工作线程可避免
+            # 阻塞 FastAPI 事件循环，其他健康检查和页面请求仍能正常响应。
+            llm = self._llm or await asyncio.to_thread(LLMFactory.create)
             result = await llm.ainvoke(
                 [
                     SystemMessage(content=CUSTOMER_SERVICE_SYSTEM_PROMPT),

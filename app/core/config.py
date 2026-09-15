@@ -30,7 +30,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("APP_DEBUG", "DEBUG"),
     )
     app_host: str = Field(
-        default="0.0.0.0",
+        default="127.0.0.1",
         validation_alias=AliasChoices("APP_HOST", "HOST"),
     )
     app_port: int = Field(
@@ -42,6 +42,22 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_dir: Path = PROJECT_ROOT / "logs"
     default_tenant_id: str = "tenant_default"
+    default_shop_name: str = "拼多多店铺"
+
+    pdd_chat_url: str = "https://mms.pinduoduo.com/chat-merchant/index.html"
+    pdd_chrome_executable: Path | None = None
+    pdd_chrome_profile_dir: Path = PROJECT_ROOT / "data" / "runtime" / "pdd-chrome"
+    pdd_poll_interval_seconds: float = Field(default=1.0, ge=0.5, le=10)
+
+    auto_reply_debounce_seconds: float = Field(default=2.0, ge=0.5, le=30)
+    auto_reply_policy_version: str = "v1"
+    auto_reply_calibration_path: Path = (
+        PROJECT_ROOT / "data" / "runtime" / "auto_reply_calibration.json"
+    )
+    auto_reply_min_precision: float = Field(default=0.98, ge=0.5, le=1)
+    auto_reply_min_samples: int = Field(default=100, ge=1)
+    message_retention_days: int = Field(default=30, ge=1)
+    audit_retention_days: int = Field(default=90, ge=1)
 
     mysql_host: str = "127.0.0.1"
     mysql_port: int = Field(default=3306, ge=1, le=65535)
@@ -57,6 +73,24 @@ class Settings(BaseSettings):
     milvus_host: str = "127.0.0.1"
     milvus_port: int = Field(default=19530, ge=1, le=65535)
     milvus_collection: str = "customer_service_knowledge"
+
+    qa_data_source: str = "mysql"
+    qa_excel_path: Path = PROJECT_ROOT / "data" / "qa" / "整理结果" / "智能客服标准QA整理.xlsx"
+    qa_excel_sheet: str = "标准QA"
+
+    embedding_provider: str = "sentence_transformers"
+    embedding_model: str | None = None
+    vector_store: str = "milvus"
+
+    rag_dense_top_k: int = Field(default=20, ge=1, le=100)
+    rag_bm25_top_k: int = Field(default=20, ge=1, le=100)
+    rag_fusion_top_k: int = Field(default=20, ge=1, le=100)
+    rag_rerank_top_k: int = Field(default=5, ge=1, le=50)
+    rrf_k: int = Field(default=60, ge=1)
+    rag_score_threshold: float = 0.35
+
+    reranker_provider: str = "sentence_transformers"
+    reranker_model: str | None = None
 
     minio_endpoint: str = "127.0.0.1:9000"
     minio_root_user: str = "customer_service_minio"
@@ -84,6 +118,7 @@ class Settings(BaseSettings):
     llm_temperature: float = Field(default=0.2, ge=0, le=2)
     llm_timeout_seconds: float = Field(default=120.0, gt=0)
     llm_max_retries: int = Field(default=2, ge=0)
+    llm_warmup_on_startup: bool = True
     llm_structured_output_method: str = "function_calling"
 
     embedding_model_path: Path = PROJECT_ROOT / "model" / "bge-m3"
@@ -99,14 +134,37 @@ class Settings(BaseSettings):
             raise ValueError(f"log_level must be one of {sorted(allowed)}")
         return level
 
-    @field_validator("log_dir")
+    @field_validator(
+        "log_dir",
+        "qa_excel_path",
+        "embedding_model_path",
+        "reranker_model_path",
+        "pdd_chrome_profile_dir",
+        "auto_reply_calibration_path",
+    )
     @classmethod
     def resolve_log_dir(cls, value: Path) -> Path:
         """将相对日志目录固定到项目根目录，避免受启动目录影响。"""
         value = value.expanduser()
         return value if value.is_absolute() else PROJECT_ROOT / value
 
-    @field_validator("llm_provider", "llm_model")
+    @field_validator("pdd_chrome_executable")
+    @classmethod
+    def resolve_optional_path(cls, value: Path | None) -> Path | None:
+        """解析可选浏览器路径；留空时由 Playwright 使用系统 Chrome。"""
+        if value is None:
+            return None
+        value = value.expanduser()
+        return value if value.is_absolute() else PROJECT_ROOT / value
+
+    @field_validator(
+        "llm_provider",
+        "llm_model",
+        "qa_data_source",
+        "embedding_provider",
+        "vector_store",
+        "reranker_provider",
+    )
     @classmethod
     def reject_blank_llm_values(cls, value: str) -> str:
         """清理模型配置两端空白，并禁止空的提供商或模型名称。"""
@@ -184,10 +242,25 @@ class Settings(BaseSettings):
             "mysql_host": self.mysql_host,
             "redis_host": self.redis_host,
             "milvus_uri": self.milvus_uri,
+            "milvus_collection": self.milvus_collection,
+            "qa_data_source": self.qa_data_source,
+            "qa_excel_path": str(self.qa_excel_path),
+            "embedding_provider": self.embedding_provider,
+            "embedding_model": self.embedding_model or str(self.embedding_model_path),
+            "vector_store": self.vector_store,
+            "reranker_provider": self.reranker_provider,
+            "reranker_model": self.reranker_model or str(self.reranker_model_path),
             "llm_provider": self.llm_provider,
             "llm_base_url": self.llm_base_url,
             "llm_model": self.llm_model,
             "llm_temperature": self.llm_temperature,
+            "llm_warmup_on_startup": self.llm_warmup_on_startup,
+            "pdd_chat_url": self.pdd_chat_url,
+            "pdd_chrome_profile_dir": str(self.pdd_chrome_profile_dir),
+            "pdd_poll_interval_seconds": self.pdd_poll_interval_seconds,
+            "auto_reply_policy_version": self.auto_reply_policy_version,
+            "message_retention_days": self.message_retention_days,
+            "audit_retention_days": self.audit_retention_days,
         }
 
 

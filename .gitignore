@@ -42,6 +42,8 @@ Desktop.ini
 *.temp
 *.bak
 .codex-tmp/
+.playwright-cli/
+output/playwright/
 outputs/
 
 # Local databases and Docker persistent data
@@ -50,6 +52,7 @@ outputs/
 *.sqlite3
 data/docker/
 data/backup/
+data/runtime/
 
 # Generated spreadsheet inspection artifacts
 *.inspect.ndjson
