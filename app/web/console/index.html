@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>拼多多智能客服工作台</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/assets/console/app.css?v=20260915-2">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">客</span>
+      <div><strong>智能客服工作台</strong><small>拼多多 · 单店本地版</small></div>
+    </div>
+    <div class="top-actions">
+      <div id="connectorPill" class="status-pill stopped"><i></i><span>连接器已停止</span></div>
+      <button id="connectorButton" class="button secondary">打开登录窗口</button>
+      <label class="switch-row"><span>全局自动接待</span><input id="globalAutomation" type="checkbox"><i></i></label>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <aside class="conversation-panel">
+      <div class="panel-head">
+        <div><h1>顾客会话</h1><span id="conversationCount">0 个会话</span></div>
+        <button id="refreshButton" class="icon-button" title="刷新">↻</button>
+      </div>
+      <div class="search"><span>⌕</span><input id="searchInput" placeholder="搜索顾客或商品"></div>
+      <nav class="filters" aria-label="会话筛选">
+        <button class="active" data-state="">全部</button>
+        <button data-state="pending">待处理</button>
+        <button data-state="manual">人工接管</button>
+      </nav>
+      <div id="conversationList" class="conversation-list">
+        <div class="empty compact">正在读取会话…</div>
+      </div>
+    </aside>
+
+    <section class="chat-panel">
+      <div id="chatHeader" class="chat-head muted">
+        <div><h2>请选择一个会话</h2><p>顾客消息会通过专用浏览器同步到这里</p></div>
+      </div>
+      <div id="messageList" class="message-list">
+        <div class="empty"><span>✦</span><strong>还没有打开会话</strong><p>启动连接器并选择左侧顾客，即可查看聊天记录。</p></div>
+      </div>
+      <form id="replyForm" class="composer hidden">
+        <div class="composer-meta">
+          <span id="replyMode">人工回复 · 发送后自动接管</span>
+          <span id="charCount">0 / 400</span>
+        </div>
+        <textarea id="replyInput" maxlength="400" placeholder="输入给顾客的回复，Ctrl + Enter 发送"></textarea>
+        <div class="composer-actions">
+          <span id="sendHint"></span>
+          <button id="sendButton" class="button primary" type="submit">发送回复</button>
+        </div>
+      </form>
+    </section>
+
+    <aside class="decision-panel">
+      <section class="detail-card">
+        <div class="card-title"><span>商品上下文</span><em id="goodsTag">未选择</em></div>
+        <div id="goodsContext" class="goods-empty">选择会话后查看关联商品</div>
+      </section>
+      <section class="detail-card decision-card">
+        <div class="card-title"><span>回复决策</span><em id="decisionRoute">等待消息</em></div>
+        <div id="decisionContent" class="decision-empty">系统建议会显示在这里。自动发送只会使用已审核的标准答案。</div>
+        <button id="useSuggestion" class="button secondary full hidden">采用建议</button>
+      </section>
+      <section class="detail-card controls-card">
+        <div class="card-title"><span>会话控制</span></div>
+        <label class="control-line"><span><b>该会话自动接待</b><small id="conversationModeNote">选择会话后设置接待方式</small></span><input id="conversationAutomation" type="checkbox" disabled></label>
+        <div class="safety-note"><strong>安全发送</strong><p>发送任务串行执行。点击后无法确认时不会重试，并会暂停全局自动接待。</p></div>
+      </section>
+    </aside>
+  </main>
+  <div id="toast" class="toast" role="status"></div>
+  <script type="module" src="/assets/console/app.js?v=20260916-5"></script>
+</body>
+</html>

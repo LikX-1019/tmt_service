@@ -1,0 +1,828 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>小满客服 · QA 检索观测台</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #081310;
+      --panel: rgba(15, 32, 27, 0.86);
+      --panel-strong: #11251f;
+      --line: rgba(176, 214, 195, 0.16);
+      --text: #eef7f1;
+      --muted: #95aea1;
+      --green: #72e1a7;
+      --green-deep: #173f31;
+      --amber: #ffb867;
+      --red: #ff8f7e;
+      --blue: #8fc9ff;
+      --shadow: 0 28px 80px rgba(0, 0, 0, 0.34);
+      font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 5% 2%, rgba(62, 159, 115, 0.2), transparent 32rem),
+        radial-gradient(circle at 90% 18%, rgba(255, 172, 87, 0.12), transparent 30rem),
+        linear-gradient(145deg, #07110e 0%, #0a1814 50%, #07100e 100%);
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.18;
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+      background-size: 34px 34px;
+      mask-image: linear-gradient(to bottom, black, transparent 85%);
+    }
+
+    button, textarea, a { font: inherit; }
+
+    button { color: inherit; }
+
+    .shell {
+      position: relative;
+      width: min(1500px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 22px 0 48px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 22px;
+    }
+
+    .brand { display: flex; align-items: center; gap: 13px; }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      border-radius: 13px;
+      color: #092018;
+      font-weight: 900;
+      background: linear-gradient(135deg, var(--green), #c8f4a4);
+      box-shadow: 0 8px 25px rgba(114, 225, 167, 0.22);
+    }
+
+    .brand h1 { margin: 0; font-size: 17px; letter-spacing: 0.04em; }
+    .brand p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+
+    .top-actions { display: flex; align-items: center; gap: 10px; }
+
+    .status-pill, .back-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 36px;
+      padding: 0 13px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(8, 20, 16, 0.62);
+      font-size: 12px;
+      text-decoration: none;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 5px rgba(114, 225, 167, 0.1);
+    }
+
+    .back-link:hover { color: var(--text); border-color: rgba(114, 225, 167, 0.35); }
+
+    .hero {
+      padding: 28px 30px;
+      margin-bottom: 18px;
+      overflow: hidden;
+      position: relative;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: linear-gradient(130deg, rgba(18, 45, 36, 0.92), rgba(15, 28, 25, 0.82));
+      box-shadow: var(--shadow);
+    }
+
+    .hero::after {
+      content: "RAG";
+      position: absolute;
+      right: 28px;
+      top: -30px;
+      color: rgba(255, 255, 255, 0.027);
+      font: 900 132px/1 system-ui, sans-serif;
+      letter-spacing: -0.06em;
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--green);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+
+    .hero h2 {
+      max-width: 720px;
+      margin: 0;
+      font-size: clamp(27px, 3vw, 45px);
+      line-height: 1.12;
+      letter-spacing: -0.035em;
+    }
+
+    .hero-copy {
+      max-width: 720px;
+      margin: 14px 0 23px;
+      color: #b5c9bf;
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .pipeline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+    .pipeline-step {
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      color: #c5d6ce;
+      background: rgba(7, 18, 14, 0.42);
+      font: 700 11px/1.1 ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+
+    .pipeline-arrow { color: #567366; font-size: 14px; }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(290px, 355px) minmax(0, 1fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: var(--panel);
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.2);
+      backdrop-filter: blur(16px);
+    }
+
+    .control { padding: 21px; position: sticky; top: 18px; }
+
+    .section-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 11px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    .kbd {
+      padding: 3px 6px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      color: #6f8c7e;
+      font: 10px ui-monospace, monospace;
+    }
+
+    textarea {
+      display: block;
+      width: 100%;
+      min-height: 125px;
+      resize: vertical;
+      padding: 15px;
+      border: 1px solid rgba(176, 214, 195, 0.2);
+      border-radius: 14px;
+      outline: none;
+      color: var(--text);
+      background: rgba(5, 15, 12, 0.72);
+      font-size: 14px;
+      line-height: 1.6;
+      transition: border-color 160ms, box-shadow 160ms;
+    }
+
+    textarea:focus {
+      border-color: rgba(114, 225, 167, 0.62);
+      box-shadow: 0 0 0 3px rgba(114, 225, 167, 0.09);
+    }
+
+    textarea::placeholder { color: #5f796d; }
+
+    .submit {
+      width: 100%;
+      min-height: 46px;
+      margin-top: 11px;
+      border: 0;
+      border-radius: 13px;
+      color: #071610;
+      background: linear-gradient(135deg, var(--green), #b9ef9e);
+      font-weight: 900;
+      cursor: pointer;
+      box-shadow: 0 12px 24px rgba(61, 173, 116, 0.18);
+      transition: transform 150ms, filter 150ms;
+    }
+
+    .submit:hover { transform: translateY(-1px); filter: brightness(1.04); }
+    .submit:disabled { cursor: wait; opacity: 0.65; transform: none; }
+
+    .samples { display: grid; gap: 8px; margin-top: 22px; }
+
+    .sample {
+      display: grid;
+      grid-template-columns: 29px 1fr;
+      gap: 10px;
+      width: 100%;
+      padding: 11px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      text-align: left;
+      background: rgba(8, 22, 17, 0.5);
+      cursor: pointer;
+      transition: background 150ms, border-color 150ms;
+    }
+
+    .sample:hover { background: rgba(27, 57, 45, 0.55); border-color: rgba(114, 225, 167, 0.3); }
+
+    .sample-index {
+      display: grid;
+      place-items: center;
+      width: 29px;
+      height: 29px;
+      border-radius: 9px;
+      color: var(--green);
+      background: rgba(114, 225, 167, 0.1);
+      font: 800 11px ui-monospace, monospace;
+    }
+
+    .sample strong { display: block; margin-bottom: 3px; font-size: 12px; }
+    .sample span:last-child { display: block; color: var(--muted); font-size: 11px; line-height: 1.45; }
+
+    .notice {
+      margin: 18px 0 0;
+      padding: 11px 12px;
+      border-left: 2px solid var(--amber);
+      border-radius: 0 9px 9px 0;
+      color: #9eb2a8;
+      background: rgba(255, 184, 103, 0.06);
+      font-size: 11px;
+      line-height: 1.6;
+    }
+
+    .workspace { min-width: 0; }
+
+    .empty {
+      display: grid;
+      min-height: 470px;
+      place-items: center;
+      padding: 38px;
+      text-align: center;
+    }
+
+    .empty-icon {
+      display: grid;
+      place-items: center;
+      width: 68px;
+      height: 68px;
+      margin: 0 auto 18px;
+      border: 1px solid rgba(114, 225, 167, 0.22);
+      border-radius: 20px;
+      color: var(--green);
+      background: rgba(114, 225, 167, 0.07);
+      font: 800 18px ui-monospace, monospace;
+    }
+
+    .empty h3 { margin: 0 0 8px; font-size: 18px; }
+    .empty p { max-width: 470px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
+
+    .loading { min-height: 470px; }
+
+    .spinner {
+      width: 28px;
+      height: 28px;
+      margin: 0 auto 18px;
+      border: 2px solid rgba(114, 225, 167, 0.18);
+      border-top-color: var(--green);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .result { display: none; gap: 18px; }
+    .result.visible { display: grid; }
+
+    .answer-card { padding: 23px; }
+    .answer-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+    .answer-head h3 { margin: 0; font-size: 16px; }
+
+    .badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 0 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(5, 15, 12, 0.56);
+      font: 700 10px ui-monospace, monospace;
+    }
+
+    .badge.route-faq { color: var(--green); border-color: rgba(114, 225, 167, 0.25); }
+    .badge.route-rag { color: var(--blue); border-color: rgba(143, 201, 255, 0.25); }
+    .badge.route-fallback { color: var(--red); border-color: rgba(255, 143, 126, 0.25); }
+
+    .query-line { margin: 18px 0 12px; color: var(--muted); font-size: 12px; }
+    .query-line span { color: #dce9e2; }
+
+    .answer-text {
+      margin: 0;
+      padding: 17px 18px;
+      border: 1px solid rgba(114, 225, 167, 0.13);
+      border-radius: 14px;
+      color: #edf7f1;
+      background: rgba(5, 16, 12, 0.58);
+      font-size: 14px;
+      line-height: 1.8;
+      white-space: pre-wrap;
+    }
+
+    .fallback-note {
+      display: none;
+      margin-top: 12px;
+      padding: 11px 13px;
+      border: 1px solid rgba(255, 143, 126, 0.18);
+      border-radius: 10px;
+      color: #f0b1a7;
+      background: rgba(255, 143, 126, 0.06);
+      font-size: 11px;
+      line-height: 1.55;
+    }
+
+    .fallback-note.visible { display: block; }
+
+    .evidence-card { overflow: hidden; }
+
+    .evidence-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 18px;
+      padding: 21px 23px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .evidence-head h3 { margin: 0 0 6px; font-size: 16px; }
+    .evidence-head p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+
+    .counts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+
+    .count {
+      padding: 7px 9px;
+      border-radius: 8px;
+      color: #91aa9d;
+      background: rgba(255, 255, 255, 0.035);
+      font: 700 10px ui-monospace, monospace;
+    }
+
+    .count b { color: #dae8e0; }
+
+    .evidence-list { display: grid; }
+
+    .evidence {
+      display: grid;
+      grid-template-columns: 46px minmax(0, 1fr);
+      gap: 14px;
+      padding: 21px 23px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .evidence:last-child { border-bottom: 0; }
+
+    .rank {
+      display: grid;
+      place-items: center;
+      width: 38px;
+      height: 38px;
+      border: 1px solid rgba(114, 225, 167, 0.2);
+      border-radius: 12px;
+      color: var(--green);
+      background: rgba(114, 225, 167, 0.075);
+      font: 900 12px ui-monospace, monospace;
+    }
+
+    .evidence-top { display: flex; justify-content: space-between; gap: 15px; align-items: flex-start; }
+    .evidence-question { margin: 0; font-size: 14px; line-height: 1.55; }
+
+    .score-primary {
+      flex: none;
+      color: var(--amber);
+      font: 800 12px ui-monospace, monospace;
+      white-space: nowrap;
+    }
+
+    .product {
+      display: inline-block;
+      margin: 7px 0 10px;
+      padding: 4px 7px;
+      border-radius: 6px;
+      color: #9ec7b2;
+      background: rgba(114, 225, 167, 0.07);
+      font-size: 10px;
+    }
+
+    .evidence-answer {
+      margin: 0;
+      color: #b8cac1;
+      font-size: 12px;
+      line-height: 1.7;
+      white-space: pre-wrap;
+    }
+
+    .score-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(80px, 1fr));
+      gap: 7px;
+      margin-top: 14px;
+    }
+
+    .score-cell {
+      padding: 8px 9px;
+      border: 1px solid rgba(176, 214, 195, 0.09);
+      border-radius: 9px;
+      background: rgba(3, 12, 9, 0.32);
+    }
+
+    .score-cell span { display: block; margin-bottom: 4px; color: #6f897c; font-size: 9px; text-transform: uppercase; }
+    .score-cell strong { color: #ceddd5; font: 700 11px ui-monospace, monospace; }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      margin-top: 12px;
+      color: #617b6e;
+      font: 10px ui-monospace, monospace;
+      overflow-wrap: anywhere;
+    }
+
+    .no-evidence { padding: 30px 23px; color: var(--muted); text-align: center; font-size: 12px; }
+
+    .error-card {
+      display: none;
+      padding: 20px;
+      border-color: rgba(255, 143, 126, 0.25);
+      color: #ffc1b8;
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .error-card.visible { display: block; }
+
+    @media (max-width: 900px) {
+      .shell { width: min(100% - 24px, 720px); padding-top: 14px; }
+      .hero { padding: 23px; }
+      .hero::after { display: none; }
+      .layout { grid-template-columns: 1fr; }
+      .control { position: static; }
+      .empty, .loading { min-height: 320px; }
+    }
+
+    @media (max-width: 590px) {
+      .topbar { align-items: flex-start; }
+      .status-pill { display: none; }
+      .hero { border-radius: 18px; }
+      .pipeline-arrow { display: none; }
+      .pipeline-step { padding: 7px 9px; }
+      .answer-head, .evidence-head { display: grid; }
+      .badges, .counts { justify-content: flex-start; }
+      .evidence { grid-template-columns: 36px minmax(0, 1fr); gap: 10px; padding: 18px 15px; }
+      .rank { width: 32px; height: 32px; }
+      .evidence-top { display: grid; gap: 7px; }
+      .score-grid { grid-template-columns: repeat(2, minmax(90px, 1fr)); }
+      .answer-card, .control { padding: 18px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">满</div>
+        <div>
+          <h1>小满客服</h1>
+          <p>QA Retrieval Observatory</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <span class="status-pill"><span class="status-dot"></span>真实知识库已连接</span>
+        <a class="back-link" href="/">返回聊天页 ↗</a>
+      </div>
+    </header>
+
+    <section class="hero">
+      <p class="eyebrow">Retrieval Inspector / QA 检索观测台</p>
+      <h2>看见答案，也看见答案从哪里来。</h2>
+      <p class="hero-copy">输入顾客问题，实时查看 FAQ 精确匹配或混合检索结果。页面展示最终进入 TopK 的真实标准问题、标准答案和各阶段检索分数。</p>
+      <div class="pipeline" aria-label="检索流程">
+        <span class="pipeline-step">NORMALIZE</span><span class="pipeline-arrow">→</span>
+        <span class="pipeline-step">FAQ EXACT</span><span class="pipeline-arrow">→</span>
+        <span class="pipeline-step">DENSE + BM25</span><span class="pipeline-arrow">→</span>
+        <span class="pipeline-step">RRF FUSION</span><span class="pipeline-arrow">→</span>
+        <span class="pipeline-step">BGE RERANK</span>
+      </div>
+    </section>
+
+    <div class="layout">
+      <aside class="card control">
+        <div class="section-label"><span>输入顾客问题</span><span class="kbd">Ctrl ↵</span></div>
+        <textarea id="query" maxlength="2000" placeholder="例如：双条髌骨带适合多粗的腿围？" autofocus></textarea>
+        <button id="submit" class="submit" type="button">开始检索</button>
+
+        <div class="samples">
+          <div class="section-label"><span>一键体验三条链路</span></div>
+          <button class="sample" type="button" data-query="发什么快递？从哪里发货？多久能到？能发顺丰吗？">
+            <span class="sample-index">01</span><span><strong>FAQ 精确命中</strong><span>发什么快递？从哪里发货？多久能到？能发顺丰吗？</span></span>
+          </button>
+          <button class="sample" type="button" data-query="双条髌骨带适合多粗的腿围？">
+            <span class="sample-index">02</span><span><strong>混合检索 + RAG</strong><span>双条髌骨带适合多粗的腿围？</span></span>
+          </button>
+          <button class="sample" type="button" data-query="你们公司的老板是谁？">
+            <span class="sample-index">03</span><span><strong>低置信度兜底</strong><span>你们公司的老板是谁？</span></span>
+          </button>
+        </div>
+        <p class="notice">首次运行混合检索时需要把本地 BGE 模型载入内存，可能等待约 30–60 秒；后续查询会明显加快。</p>
+      </aside>
+
+      <section class="workspace" aria-live="polite">
+        <div id="empty" class="card empty">
+          <div>
+            <div class="empty-icon">TOPK</div>
+            <h3>等待一次真实检索</h3>
+            <p>从左侧选择样例，或输入任意售前、物流、使用及售后问题。检索完成后，这里会展开答案和真实 QA 召回证据。</p>
+          </div>
+        </div>
+
+        <div id="loading" class="card empty loading" hidden>
+          <div>
+            <div class="spinner"></div>
+            <h3>正在穿过检索链路</h3>
+            <p id="loadingText">查询标准化、混合召回和重排正在进行中…</p>
+          </div>
+        </div>
+
+        <div id="error" class="card error-card" role="alert"></div>
+
+        <div id="result" class="result">
+          <article class="card answer-card">
+            <div class="answer-head">
+              <h3>客服最终答案</h3>
+              <div class="badges">
+                <span id="routeBadge" class="badge"></span>
+                <span id="confidenceBadge" class="badge"></span>
+                <span id="timeBadge" class="badge"></span>
+              </div>
+            </div>
+            <p class="query-line">顾客问题：<span id="resultQuery"></span></p>
+            <p id="answer" class="answer-text"></p>
+            <div id="fallbackNote" class="fallback-note">本次最高重排分低于回答阈值，因此系统没有把相似内容当作可靠答案；下方仍展示它实际检索到的候选 QA，便于检查召回质量。</div>
+          </article>
+
+          <article class="card evidence-card">
+            <header class="evidence-head">
+              <div>
+                <h3>召回的真实问答对</h3>
+                <p>以下内容来自本次请求实际进入最终重排 TopK 的数据库记录。</p>
+              </div>
+              <div id="counts" class="counts"></div>
+            </header>
+            <div id="evidenceList" class="evidence-list"></div>
+          </article>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const API_URL = "/api/v1/qa/demo";
+    const queryInput = document.getElementById("query");
+    const submitButton = document.getElementById("submit");
+    const emptyState = document.getElementById("empty");
+    const loadingState = document.getElementById("loading");
+    const loadingText = document.getElementById("loadingText");
+    const result = document.getElementById("result");
+    const errorCard = document.getElementById("error");
+    const routeLabels = { faq: "FAQ 精确命中", rag: "RAG 生成回答", fallback: "低置信度兜底" };
+
+    function setText(id, value) {
+      document.getElementById(id).textContent = value;
+    }
+
+    function formatScore(value, digits = 4) {
+      return typeof value === "number" ? value.toFixed(digits) : "—";
+    }
+
+    function scoreCell(label, value) {
+      const cell = document.createElement("div");
+      cell.className = "score-cell";
+      const name = document.createElement("span");
+      name.textContent = label;
+      const number = document.createElement("strong");
+      number.textContent = formatScore(value);
+      cell.append(name, number);
+      return cell;
+    }
+
+    function renderCounts(counts, route) {
+      const container = document.getElementById("counts");
+      container.replaceChildren();
+      if (route === "faq") {
+        const pill = document.createElement("span");
+        pill.className = "count";
+        pill.textContent = "FAQ INDEX · EXACT";
+        container.appendChild(pill);
+        return;
+      }
+      const labels = [["dense", "Dense"], ["bm25", "BM25"], ["fusion", "Fusion"], ["rerank", "Rerank"]];
+      labels.forEach(([key, label]) => {
+        const pill = document.createElement("span");
+        pill.className = "count";
+        const labelNode = document.createTextNode(`${label} `);
+        const number = document.createElement("b");
+        number.textContent = counts?.[key] ?? 0;
+        pill.append(labelNode, number);
+        container.appendChild(pill);
+      });
+    }
+
+    function renderEvidence(items) {
+      const list = document.getElementById("evidenceList");
+      list.replaceChildren();
+      if (!items.length) {
+        const empty = document.createElement("div");
+        empty.className = "no-evidence";
+        empty.textContent = "本次链路没有返回召回记录。";
+        list.appendChild(empty);
+        return;
+      }
+
+      items.forEach((item) => {
+        const row = document.createElement("section");
+        row.className = "evidence";
+
+        const rank = document.createElement("div");
+        rank.className = "rank";
+        rank.textContent = `#${item.rank}`;
+
+        const body = document.createElement("div");
+        const top = document.createElement("div");
+        top.className = "evidence-top";
+        const question = document.createElement("h4");
+        question.className = "evidence-question";
+        question.textContent = item.question;
+        const primaryScore = document.createElement("span");
+        primaryScore.className = "score-primary";
+        primaryScore.textContent = `RERANK ${formatScore(item.rerank_score)}`;
+        top.append(question, primaryScore);
+
+        body.appendChild(top);
+        if (item.product_name) {
+          const product = document.createElement("span");
+          product.className = "product";
+          product.textContent = item.product_name;
+          body.appendChild(product);
+        }
+
+        const answer = document.createElement("p");
+        answer.className = "evidence-answer";
+        answer.textContent = item.answer;
+        body.appendChild(answer);
+
+        const scores = document.createElement("div");
+        scores.className = "score-grid";
+        scores.append(
+          scoreCell("Dense", item.dense_score),
+          scoreCell("BM25", item.bm25_score),
+          scoreCell("RRF Fusion", item.fusion_score),
+          scoreCell("Reranker", item.rerank_score)
+        );
+        body.appendChild(scores);
+
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        const source = document.createElement("span");
+        source.textContent = `SOURCE · ${item.source || "unknown"}`;
+        const chunk = document.createElement("span");
+        chunk.textContent = `CHUNK · ${item.chunk_id}`;
+        meta.append(source, chunk);
+        body.appendChild(meta);
+
+        row.append(rank, body);
+        list.appendChild(row);
+      });
+    }
+
+    function showLoading() {
+      emptyState.hidden = true;
+      result.classList.remove("visible");
+      errorCard.classList.remove("visible");
+      loadingState.hidden = false;
+      loadingText.textContent = "查询标准化、混合召回和重排正在进行中…首次加载模型可能需要一点时间。";
+      submitButton.disabled = true;
+      submitButton.textContent = "检索中…";
+    }
+
+    function showError(message) {
+      loadingState.hidden = true;
+      emptyState.hidden = true;
+      result.classList.remove("visible");
+      errorCard.textContent = `请求失败：${message}`;
+      errorCard.classList.add("visible");
+    }
+
+    function renderResponse(data, query, elapsed) {
+      setText("resultQuery", query);
+      setText("answer", data.answer.replaceAll("**", ""));
+
+      const routeBadge = document.getElementById("routeBadge");
+      routeBadge.className = `badge route-${data.route}`;
+      routeBadge.textContent = routeLabels[data.route] || data.route;
+
+      const confidence = typeof data.confidence === "number" ? `${(data.confidence * 100).toFixed(1)}%` : "—";
+      setText("confidenceBadge", `置信度 ${confidence}`);
+      setText("timeBadge", `${Math.round(elapsed)} ms`);
+
+      document.getElementById("fallbackNote").classList.toggle("visible", data.route === "fallback");
+      renderCounts(data.retrieval_counts, data.route);
+      renderEvidence(data.recalled_pairs || []);
+
+      loadingState.hidden = true;
+      errorCard.classList.remove("visible");
+      result.classList.add("visible");
+    }
+
+    async function search() {
+      const query = queryInput.value.trim();
+      if (!query) {
+        queryInput.focus();
+        return;
+      }
+
+      showLoading();
+      const started = performance.now();
+      try {
+        const response = await fetch(API_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query })
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok || !payload || payload.code !== 0) {
+          throw new Error(payload?.message || `HTTP ${response.status}`);
+        }
+        renderResponse(payload.data, query, performance.now() - started);
+      } catch (error) {
+        showError(error instanceof Error ? error.message : "未知错误");
+      } finally {
+        submitButton.disabled = false;
+        submitButton.textContent = "开始检索";
+      }
+    }
+
+    submitButton.addEventListener("click", search);
+    queryInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) search();
+    });
+    document.querySelectorAll(".sample").forEach((button) => {
+      button.addEventListener("click", () => {
+        queryInput.value = button.dataset.query || "";
+        search();
+      });
+    });
+  </script>
+</body>
+</html>
