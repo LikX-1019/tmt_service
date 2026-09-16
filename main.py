@@ -1,5 +1,7 @@
 """FastAPI 应用入口，负责组装配置、路由、中间件和异常处理器。"""
 
+import logging
+
 from fastapi import FastAPI
 
 from app.api.router import api_router
@@ -17,6 +19,11 @@ def create_app() -> FastAPI:
     """创建并配置 FastAPI 应用，不在入口文件中放置业务逻辑。"""
     settings = get_settings()
     configure_logging(settings)
+    if settings.app_host in {"0.0.0.0", "::"}:
+        logging.getLogger(__name__).warning(
+            "public_bind_without_authentication",
+            extra={"event": "public_bind_without_authentication", "app_host": settings.app_host},
+        )
     application = FastAPI(
         title=settings.app_name,
         debug=settings.app_debug,

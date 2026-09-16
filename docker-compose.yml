@@ -12,7 +12,7 @@ services:
       MYSQL_USER: ${MYSQL_USER}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     ports:
-      - "${MYSQL_PORT}:3306"
+      - "127.0.0.1:${MYSQL_PORT}:3306"
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
@@ -25,31 +25,6 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
-    networks:
-      - customer-service-network
-
-  redis:
-    image: redis:7.4-alpine
-    container_name: ${COMPOSE_PROJECT_NAME:-customer-service}-redis
-    restart: unless-stopped
-    environment:
-      TZ: ${TZ}
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
-    ports:
-      - "${REDIS_PORT}:6379"
-    command:
-      - redis-server
-      - --appendonly
-      - "yes"
-      - --requirepass
-      - ${REDIS_PASSWORD}
-    volumes:
-      - ./data/docker/redis:/data
-    healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a $$REDIS_PASSWORD ping | grep PONG"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
     networks:
       - customer-service-network
 
@@ -85,8 +60,8 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     ports:
-      - "${MINIO_API_PORT}:9000"
-      - "${MINIO_CONSOLE_PORT}:9001"
+      - "127.0.0.1:${MINIO_API_PORT}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT}:9001"
     command: server /data --console-address ":9001"
     volumes:
       - ./data/docker/minio:/data
@@ -109,8 +84,8 @@ services:
       MINIO_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
       MINIO_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
     ports:
-      - "${MILVUS_PORT}:19530"
-      - "${MILVUS_METRICS_PORT}:9091"
+      - "127.0.0.1:${MILVUS_PORT}:19530"
+      - "127.0.0.1:${MILVUS_METRICS_PORT}:9091"
     volumes:
       - ./data/docker/milvus:/var/lib/milvus
     depends_on:
@@ -134,7 +109,7 @@ services:
     environment:
       MILVUS_URL: milvus:19530
     ports:
-      - "${ATTU_PORT}:3000"
+      - "127.0.0.1:${ATTU_PORT}:3000"
     depends_on:
       milvus:
         condition: service_healthy

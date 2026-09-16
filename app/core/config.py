@@ -39,6 +39,11 @@ class Settings(BaseSettings):
         le=65535,
         validation_alias=AliasChoices("APP_PORT", "PORT"),
     )
+    sqlalchemy_database_url: str | None = Field(
+        default=None,
+        validation_alias="DATABASE_URL",
+        exclude=True,
+    )
     log_level: str = "INFO"
     log_dir: Path = PROJECT_ROOT / "logs"
     default_tenant_id: str = "tenant_default"
@@ -48,6 +53,8 @@ class Settings(BaseSettings):
     pdd_chrome_executable: Path | None = None
     pdd_chrome_profile_dir: Path = PROJECT_ROOT / "data" / "runtime" / "pdd-chrome"
     pdd_poll_interval_seconds: float = Field(default=1.0, ge=0.5, le=10)
+    message_asset_dir: Path = PROJECT_ROOT / "data" / "message-assets"
+    message_asset_max_bytes: int = Field(default=8 * 1024 * 1024, ge=1024, le=50 * 1024 * 1024)
 
     auto_reply_debounce_seconds: float = Field(default=2.0, ge=0.5, le=30)
     auto_reply_policy_version: str = "v1"
@@ -65,14 +72,13 @@ class Settings(BaseSettings):
     mysql_user: str = "customer_service"
     mysql_password: SecretStr = SecretStr("")
 
-    redis_host: str = "127.0.0.1"
-    redis_port: int = Field(default=6379, ge=1, le=65535)
-    redis_password: SecretStr = SecretStr("")
-    redis_db: int = Field(default=0, ge=0)
-
     milvus_host: str = "127.0.0.1"
     milvus_port: int = Field(default=19530, ge=1, le=65535)
-    milvus_collection: str = "customer_service_knowledge"
+    milvus_collection: str = "customer_service_knowledge_v1"
+    milvus_schema_version: int = Field(default=1, ge=1)
+    embedding_version: str = "v1"
+    embedding_max_concurrency: int = Field(default=2, ge=1, le=16)
+    reranker_max_concurrency: int = Field(default=1, ge=1, le=16)
 
     qa_data_source: str = "mysql"
     qa_excel_path: Path = PROJECT_ROOT / "data" / "qa" / "整理结果" / "智能客服标准QA整理.xlsx"
@@ -134,6 +140,17 @@ class Settings(BaseSettings):
             raise ValueError(f"log_level must be one of {sorted(allowed)}")
         return level
 
+    @field_validator("app_env")
+    @classmethod
+    def normalize_app_env(cls, value: str) -> str:
+        """只接受明确的运行环境名称，避免拼写错误静默改变安全默认值。"""
+        environment = value.strip().lower()
+        aliases = {"local": "development", "dev": "development", "prod": "production"}
+        environment = aliases.get(environment, environment)
+        if environment not in {"development", "test", "production"}:
+            raise ValueError("app_env must be development, test, or production")
+        return environment
+
     @field_validator(
         "log_dir",
         "qa_excel_path",
@@ -141,6 +158,7 @@ class Settings(BaseSettings):
         "reranker_model_path",
         "pdd_chrome_profile_dir",
         "auto_reply_calibration_path",
+        "message_asset_dir",
     )
     @classmethod
     def resolve_log_dir(cls, value: Path) -> Path:
@@ -198,6 +216,8 @@ class Settings(BaseSettings):
     @property
     def database_url(self) -> str:
         """生成已安全转义账号密码的 SQLAlchemy 异步连接地址。"""
+        if self.sqlalchemy_database_url:
+            return self.sqlalchemy_database_url
         user = quote_plus(self.mysql_user)
         password = quote_plus(self.mysql_password.get_secret_value())
         database = quote_plus(self.mysql_database)
@@ -205,13 +225,6 @@ class Settings(BaseSettings):
             f"mysql+aiomysql://{user}:{password}"
             f"@{self.mysql_host}:{self.mysql_port}/{database}?charset=utf8mb4"
         )
-
-    @property
-    def redis_url(self) -> str:
-        """生成已安全转义密码的 Redis 连接地址。"""
-        password = self.redis_password.get_secret_value()
-        auth = f":{quote_plus(password)}@" if password else ""
-        return f"redis://{auth}{self.redis_host}:{self.redis_port}/{self.redis_db}"
 
     @property
     def milvus_uri(self) -> str:
@@ -240,16 +253,19 @@ class Settings(BaseSettings):
             "log_level": self.log_level,
             "log_dir": str(self.log_dir),
             "mysql_host": self.mysql_host,
-            "redis_host": self.redis_host,
             "milvus_uri": self.milvus_uri,
             "milvus_collection": self.milvus_collection,
+            "milvus_schema_version": self.milvus_schema_version,
             "qa_data_source": self.qa_data_source,
             "qa_excel_path": str(self.qa_excel_path),
             "embedding_provider": self.embedding_provider,
             "embedding_model": self.embedding_model or str(self.embedding_model_path),
+            "embedding_version": self.embedding_version,
+            "embedding_max_concurrency": self.embedding_max_concurrency,
             "vector_store": self.vector_store,
             "reranker_provider": self.reranker_provider,
             "reranker_model": self.reranker_model or str(self.reranker_model_path),
+            "reranker_max_concurrency": self.reranker_max_concurrency,
             "llm_provider": self.llm_provider,
             "llm_base_url": self.llm_base_url,
             "llm_model": self.llm_model,
@@ -258,6 +274,8 @@ class Settings(BaseSettings):
             "pdd_chat_url": self.pdd_chat_url,
             "pdd_chrome_profile_dir": str(self.pdd_chrome_profile_dir),
             "pdd_poll_interval_seconds": self.pdd_poll_interval_seconds,
+            "message_asset_dir": str(self.message_asset_dir),
+            "message_asset_max_bytes": self.message_asset_max_bytes,
             "auto_reply_policy_version": self.auto_reply_policy_version,
             "message_retention_days": self.message_retention_days,
             "audit_retention_days": self.audit_retention_days,

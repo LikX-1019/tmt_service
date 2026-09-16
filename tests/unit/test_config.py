@@ -1,4 +1,5 @@
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
+import pytest
 
 from app.core.config import PROJECT_ROOT, Settings
 
@@ -24,11 +25,28 @@ def test_connection_urls_escape_passwords() -> None:
         _env_file=None,
         mysql_user="customer service",
         mysql_password=SecretStr("p@ss/word"),
-        redis_password=SecretStr("redis pass"),
     )
 
     assert "customer+service:p%40ss%2Fword" in settings.database_url
-    assert settings.redis_url == "redis://:redis+pass@127.0.0.1:6379/0"
+
+
+def test_database_url_can_be_overridden_for_isolated_migrations() -> None:
+    settings = Settings(_env_file=None, sqlalchemy_database_url="sqlite+aiosqlite:///test.db")
+
+    assert settings.database_url == "sqlite+aiosqlite:///test.db"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("local", "development"), ("test", "test"), ("prod", "production")],
+)
+def test_settings_normalize_supported_environments(value: str, expected: str) -> None:
+    assert Settings(_env_file=None, app_env=value).app_env == expected
+
+
+def test_settings_reject_unknown_environment() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, app_env="stagin")
 
 
 def test_relative_log_dir_is_anchored_to_project() -> None:

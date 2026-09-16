@@ -22,8 +22,11 @@ BGE Reranker 和证据阈值后生成答案；证据不足时直接返回固定 
 Anaconda 或用户级 `site-packages`：
 
 ```powershell
-uv sync --extra dev
+uv sync --frozen
 ```
+
+`dev` 是 uv 的默认 dependency group，因此该命令同时安装测试与静态检查依赖。
+生产镜像使用 `uv sync --frozen --no-group dev`，不维护第二套 pip/Poetry 流程。
 
 同步完成后可直接使用专属解释器：
 
@@ -85,12 +88,21 @@ Windows 首次导入 `langchain-openai` 较慢时阻塞 FastAPI 事件循环。
 先启动数据服务并执行数据库迁移：
 
 ```powershell
-docker compose up -d mysql redis etcd minio milvus
+docker compose up -d mysql etcd minio milvus
 uv run alembic upgrade head
 ```
 
-`cs_qa` 仍由原初始化/导入脚本维护，Alembic 迁移只新增客服控制台相关表，不修改
-现有知识库数据。
+Alembic 是所有正式表（包括 `cs_qa`、会话、消息、发送任务和审计事件）的唯一 schema
+来源。全新数据库和现有开发库都使用同一条迁移链，不通过应用启动时 `create_all()` 建表。
+
+首次迁移后导入清洗后的 QA 工作簿：
+
+```powershell
+powershell -File scripts/import_cleaned_qa.ps1
+```
+
+导入会校验表头和枚举值。审核可用的数据设置为 `retrieval_enabled=true`；源工作簿没有
+明确的无人值守发送授权列，因此 `auto_reply_eligible` 安全默认为 `false`。
 
 ```powershell
 uv run uvicorn main:app --host 127.0.0.1 --port 8000 --reload
@@ -130,8 +142,8 @@ FAQ 精确命中仍会经过有效性、风险、敏感范围和商品上下文�
 uv run python scripts/calibrate_auto_reply.py data/qa/质检标注.xlsx
 ```
 
-只有不少于 `AUTO_REPLY_MIN_SAMPLES`（默认 100）条有效样本，且接受集合精确率达到
-`AUTO_REPLY_MIN_PRECISION`（默认 0.98）时，生成的
+只有不少于 `AUTO_REPLY_MIN_SAMPLES`（默认 100）条有效样本，且接受集合精确率的
+Wilson 95% 置信区间下界达到 `AUTO_REPLY_MIN_PRECISION`（默认 0.98）时，生成的
 `data/runtime/auto_reply_calibration.json` 才会启用 RAG 自动发送。当前整理工作簿只有
 聚合质检指标、没有逐条查询标注，因此在补齐标注并运行校准前，RAG 会安全降级为
 人工建议。
@@ -148,15 +160,22 @@ uv run python scripts/calibrate_auto_reply.py data/qa/质检标注.xlsx
 
 ```json
 {
-  "query": "支持七天无理由吗？"
+  "query": "材质是什么？",
+  "product_code": "SKU-001",
+  "service_stage": "pre_sale",
+  "knowledge_version": "2026-09"
 }
 ```
+
+FAQ exact match 的优先级为“商品+当前阶段、商品+general、通用+当前阶段、通用+general”。
+同一优先级存在多条结果或缺少必要商品上下文时不会任取一条自动发送，而是进入 RAG
+或人工建议。`match_score=1.0` 只表示字符串精确命中，不等于自动发送置信度。
 
 返回的 `data.route` 为 `faq`、`rag` 或 `fallback`。FAQ 精确命中置信度为
 `1.0`；RAG V1 不伪造统一置信度，返回 `null`。
 
-默认 `QA_DATA_SOURCE=mysql`，服务初始化时仅加载 `cs_qa` 中当前有效的
-`published + usable` 数据一次，用于 FAQ 和 BM25 内存索引。也可显式设置为
+默认 `QA_DATA_SOURCE=mysql`，服务初始化时仅加载 `cs_qa` 中当前有效且
+`retrieval_enabled=true` 的数据一次，用于 FAQ 和 BM25 内存索引。也可显式设置为
 `excel`，从 `QA_EXCEL_PATH` 的 `QA_EXCEL_SHEET` 读取可用记录。
 
 初始化或刷新 Milvus 向量知识库：
@@ -174,6 +193,10 @@ uv run python scripts/calibrate_auto_reply.py data/qa/质检标注.xlsx
 脚本输出文档数、chunk 数、成功数、失败数和 collection。执行前需要 Milvus
 可用，并确保 `EMBEDDING_MODEL_PATH` 或 `EMBEDDING_MODEL` 指向可加载的 BGE 模型。
 RAG 查询还需要 `RERANKER_MODEL_PATH` 或 `RERANKER_MODEL` 可用。
+
+索引 chunk 带 document/version/content hash/model/schema/active 元数据。新版本完整写入并
+验证后才激活，旧版本随后删除；搜索只返回 active chunk。collection 的向量维度或必要
+schema 字段不兼容时脚本会拒绝复用，需提升 `MILVUS_COLLECTION` 版本名。
 
 `RAG_SCORE_THRESHOLD` 必须结合业务测试集与所用 reranker 分数分布调优，示例值
 不是通用最佳阈值。
@@ -214,6 +237,29 @@ uv run pytest -q
 uv run ruff check .
 ```
 
+迁移链可用隔离 SQLite 数据库快速验证：
+
+```powershell
+$env:DATABASE_URL="sqlite+aiosqlite:///./migration-test.db"
+uv run alembic upgrade head
+uv run alembic downgrade -1
+uv run alembic upgrade head
+Remove-Item Env:DATABASE_URL
+```
+
+基础设施配置检查：
+
+```powershell
+docker compose config --quiet
+```
+
+### 常见问题
+
+- `cs_qa` 为空：先执行 migration，再运行 `scripts/import_cleaned_qa.ps1`。
+- Milvus schema incompatible：提升 `MILVUS_COLLECTION` 版本名后重新索引，不要复用旧表。
+- RAG 只给人工建议：检查校准文件的样本数和 Wilson 下界；这是默认安全行为。
+- 拼多多连接器未就绪：重新打开专用 Chrome 并确认已登录，不要复制 Cookie 到配置。
+
 测试通过依赖覆盖和 Fake LLM/Retriever 执行，不会向真实模型、Embedding API 或
 远程向量库发送请求。
 
@@ -223,3 +269,7 @@ uv run ruff check .
 轨迹或退款进度，不处理图片理解、语音转写、多店铺、多客服分配和公网部署。页面自动化
 可能随拼多多页面升级而需要更新 `app/integrations/pdd/selectors.py`；业务层通过
 `CustomerServiceConnector` 接口隔离，后续可替换为官方连接器。
+
+`NEEDS_PRODUCT_DECISION`：当前 QA 工作簿没有逐条“允许无人值守自动发送”字段，所有
+导入条目保持 `auto_reply_eligible=false`。产品/质检团队定义并填写该授权字段前，不应
+批量开启 FAQ 自动发送。

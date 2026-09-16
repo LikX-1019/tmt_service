@@ -47,7 +47,9 @@ COLUMNS = [
     "required_points",
     "prohibited_expressions",
     "risk_level",
-    "need_human",
+    "retrieval_enabled",
+    "auto_reply_eligible",
+    "human_required",
     "applicable_version",
     "answer_version",
     "priority",
@@ -88,6 +90,15 @@ def split_items(value: Any, *, split_whitespace: bool = False) -> list[str]:
 def answer_version(version_code: Any) -> int:
     match = re.search(r"-V(\d+)$", text(version_code) or "", flags=re.IGNORECASE)
     return int(match.group(1)) if match else 1
+
+
+def boolean_value(value: Any) -> bool:
+    """保守解析 Excel 布尔值，未知文本不视为真。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return (text(value) or "").lower() in {"1", "true", "yes", "是", "需要"}
 
 
 def sql_value(value: Any) -> str:
@@ -170,7 +181,11 @@ def load_rows(source: Path, sheet_name: str, batch_no: str) -> list[dict[str, An
                     split_items(row.get("禁止表达")), ensure_ascii=False
                 ),
                 "risk_level": risk,
-                "need_human": 0,
+                "retrieval_enabled": review_status == "usable",
+                # 源表没有明确的无人值守发送授权，必须安全默认关闭。
+                "auto_reply_eligible": False,
+                "human_required": boolean_value(row.get("是否必须转人工"))
+                or boolean_value(row.get("高风险问题")),
                 "applicable_version": text(row.get("适用资料版本")),
                 "answer_version": answer_version(row.get("当前话术版本")),
                 "priority": 0,

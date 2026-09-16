@@ -16,19 +16,21 @@ class BGEReranker:
     ) -> None:
         self._model = model
         self._settings = settings or get_settings()
+        self._semaphore = asyncio.Semaphore(self._settings.reranker_max_concurrency)
 
     async def rerank(
         self, query: str, documents: list[RetrievalDocument]
     ) -> list[RetrievalDocument]:
         if not documents:
             return []
-        if self._model is None:
-            self._model = await asyncio.to_thread(
-                RerankerFactory.create, self._settings
+        async with self._semaphore:
+            if self._model is None:
+                self._model = await asyncio.to_thread(
+                    RerankerFactory.create, self._settings
+                )
+            scores = await asyncio.to_thread(
+                self._model.score, query, [document.content for document in documents]
             )
-        scores = await asyncio.to_thread(
-            self._model.score, query, [document.content for document in documents]
-        )
         ranked = [
             document.copy(rerank_score=score)
             for document, score in zip(documents, scores, strict=True)

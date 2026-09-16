@@ -32,4 +32,9 @@ class KnowledgeIndexer:
             else:
                 succeeded += count
                 failed += max(0, len(batch) - count)
+        if documents and failed == 0:
+            try:
+                await asyncio.to_thread(self._vector_store.activate_versions, documents)
+            except Exception:
+                return 0, len(documents)
         return succeeded, failed
