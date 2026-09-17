@@ -7,13 +7,18 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import delete, desc, func, or_, select, update
+from sqlalchemy import case, delete, desc, func, or_, select, update
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import NO_VALUE
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agent.greeting import (
+    default_reply_templates,
+    default_trigger_groups,
+    normalize_reply_templates,
+)
 from app.integrations.pdd.base import normalize_platform_customer_id
 from app.models.conversation import (
     AgentAccount,
@@ -25,6 +30,7 @@ from app.models.conversation import (
     OutboundJob,
     ReplyDecision,
     Shop,
+    ShopGreetingConfig,
 )
 
 
@@ -60,6 +66,8 @@ def conversation_to_dict(item: Conversation) -> dict[str, Any]:
         "auto_reply_enabled": item.auto_reply_enabled,
         "unread_count": item.unread_count,
         "last_message_at": _iso(item.last_message_at),
+        "response_started_at": _iso(item.response_started_at),
+        "response_deadline_at": _iso(item.response_deadline_at),
         "updated_at": _iso(item.updated_at),
     }
 
@@ -122,6 +130,8 @@ def decision_to_dict(item: ReplyDecision | None) -> dict[str, Any] | None:
         "id": item.id,
         "route": item.route,
         "action": item.action,
+        "greeting_type": item.greeting_type,
+        "recognition_source": item.recognition_source,
         "qa_code": item.qa_code,
         "top_score": item.top_score,
         "score_margin": item.score_margin,
@@ -129,6 +139,15 @@ def decision_to_dict(item: ReplyDecision | None) -> dict[str, Any] | None:
         "suggested_answer": item.suggested_answer,
         "policy_version": item.policy_version,
         "created_at": _iso(item.created_at),
+    }
+
+
+def greeting_config_to_dict(item: ShopGreetingConfig) -> dict[str, Any]:
+    return {
+        "enabled": item.enabled,
+        "trigger_groups": item.trigger_groups,
+        "reply_templates": normalize_reply_templates(item.reply_templates),
+        "updated_at": _iso(item.updated_at),
     }
 
 
@@ -160,6 +179,7 @@ class ConsoleRepository:
                 await session.refresh(item)
             return {
                 "id": item.id,
+                "platform": item.platform,
                 "name": item.name,
                 "global_auto_reply_enabled": item.global_auto_reply_enabled,
             }
@@ -171,6 +191,7 @@ class ConsoleRepository:
                 return None
             return {
                 "id": item.id,
+                "platform": item.platform,
                 "name": item.name,
                 "global_auto_reply_enabled": item.global_auto_reply_enabled,
             }
@@ -183,6 +204,54 @@ class ConsoleRepository:
             item.global_auto_reply_enabled = enabled
             await session.commit()
             return {"enabled": enabled}
+
+    async def get_greeting_config(self, shop_id: str) -> dict[str, Any]:
+        """读取店铺配置；历史店铺没有配置时懒创建默认值。"""
+        async with self._session_factory() as session:
+            item = await session.get(ShopGreetingConfig, shop_id)
+            if item is None:
+                if await session.get(Shop, shop_id) is None:
+                    raise LookupError("店铺不存在")
+                item = ShopGreetingConfig(
+                    shop_id=shop_id,
+                    enabled=True,
+                    trigger_groups=default_trigger_groups(),
+                    reply_templates=default_reply_templates(),
+                )
+                session.add(item)
+                try:
+                    await session.commit()
+                except IntegrityError:
+                    await session.rollback()
+                    item = await session.get(ShopGreetingConfig, shop_id)
+                    if item is None:
+                        raise
+                else:
+                    await session.refresh(item)
+            return greeting_config_to_dict(item)
+
+    async def update_greeting_config(
+        self,
+        shop_id: str,
+        *,
+        enabled: bool,
+        trigger_groups: dict[str, list[str]],
+        reply_templates: dict[str, list[str]],
+    ) -> dict[str, Any]:
+        async with self._session_factory() as session:
+            if await session.get(Shop, shop_id) is None:
+                raise LookupError("店铺不存在")
+            item = await session.get(ShopGreetingConfig, shop_id)
+            if item is None:
+                item = ShopGreetingConfig(shop_id=shop_id)
+                session.add(item)
+            item.enabled = enabled
+            item.trigger_groups = dict(trigger_groups)
+            item.reply_templates = normalize_reply_templates(reply_templates)
+            item.updated_at = datetime.now(timezone.utc)
+            await session.commit()
+            await session.refresh(item)
+            return greeting_config_to_dict(item)
 
     async def _resolve_profile(
         self,
@@ -327,7 +396,11 @@ class ConsoleRepository:
         return account
 
     async def ingest_message(
-        self, shop_id: str, payload: dict[str, Any]
+        self,
+        shop_id: str,
+        payload: dict[str, Any],
+        *,
+        response_timeout_seconds: int = 160,
     ) -> tuple[dict[str, Any], dict[str, Any], bool]:
         async with self._session_factory() as session:
             async with session.begin():
@@ -446,12 +519,20 @@ class ConsoleRepository:
                             metadata_json=asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {},
                         ))
                 conversation.last_message_at = payload["occurred_at"]
-                if payload["direction"] == "inbound" and not bool(
-                    payload.get("is_backfill")
-                ):
-                    conversation.unread_count += 1
-                    if conversation.state != "manual":
-                        conversation.state = "pending"
+                is_live = not bool(payload.get("is_backfill"))
+                if is_live:
+                    if payload["direction"] == "inbound":
+                        received_at = datetime.now(timezone.utc)
+                        conversation.response_started_at = received_at
+                        conversation.response_deadline_at = received_at + timedelta(
+                            seconds=response_timeout_seconds
+                        )
+                        conversation.unread_count += 1
+                        if conversation.state != "manual":
+                            conversation.state = "pending"
+                    elif payload["direction"] == "outbound":
+                        conversation.response_started_at = None
+                        conversation.response_deadline_at = None
                 await session.flush()
                 return conversation_to_dict(conversation), message_to_dict(message), True
 
@@ -478,7 +559,10 @@ class ConsoleRepository:
         if before:
             statement = statement.where(Conversation.last_message_at < before)
         statement = statement.order_by(
-            desc(Conversation.last_message_at), desc(Conversation.id)
+            case((Conversation.response_deadline_at.is_(None), 1), else_=0),
+            Conversation.response_deadline_at,
+            desc(Conversation.last_message_at),
+            desc(Conversation.id),
         ).limit(limit)
         async with self._session_factory() as session:
             items = (await session.scalars(statement)).all()
@@ -701,6 +785,8 @@ class ConsoleRepository:
                     conversation.state = "auto_replied" if job.source == "auto" else "manual"
                     conversation.unread_count = 0
                     conversation.last_message_at = sent_at or datetime.now(timezone.utc)
+                    conversation.response_started_at = None
+                    conversation.response_deadline_at = None
             await session.commit()
             await session.refresh(job)
             return job_to_dict(job)

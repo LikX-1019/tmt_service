@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from app.agent.greeting import GREETING_TYPES, normalize_greeting_phrase
 
 
 class ConversationView(BaseModel):
@@ -23,7 +25,15 @@ class ConversationView(BaseModel):
     auto_reply_enabled: bool
     unread_count: int
     last_message_at: datetime | None = None
+    response_started_at: datetime | None = None
+    response_deadline_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+class ShopSummaryView(BaseModel):
+    id: str
+    platform: str
+    name: str
 
 
 class MessageView(BaseModel):
@@ -57,6 +67,8 @@ class ReplyDecisionView(BaseModel):
     id: str
     route: str
     action: str
+    greeting_type: Literal["salutation", "availability", "thanks", "goodbye"] | None = None
+    recognition_source: Literal["rule", "llm"] | None = None
     qa_code: str | None = None
     top_score: float | None = None
     score_margin: float | None = None
@@ -131,6 +143,80 @@ class AutomationUpdate(BaseModel):
 
 class AutomationData(BaseModel):
     enabled: bool
+
+
+class GreetingTriggerGroups(BaseModel):
+    salutation: list[str] = Field(max_length=50)
+    availability: list[str] = Field(max_length=50)
+    thanks: list[str] = Field(max_length=50)
+    goodbye: list[str] = Field(max_length=50)
+
+    @field_validator("*")
+    @classmethod
+    def validate_phrases(cls, values: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for raw_value in values:
+            value = raw_value.strip()
+            normalized = normalize_greeting_phrase(value)
+            if not normalized:
+                continue
+            if len(value) > 40:
+                raise ValueError("单条触发语不能超过 40 个字符")
+            if normalized not in seen:
+                cleaned.append(value)
+                seen.add(normalized)
+        return cleaned
+
+
+class GreetingReplyTemplates(BaseModel):
+    salutation: list[str] = Field(max_length=10)
+    availability: list[str] = Field(max_length=10)
+    thanks: list[str] = Field(max_length=10)
+    goodbye: list[str] = Field(max_length=10)
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def accept_legacy_single_reply(cls, value: object) -> object:
+        """兼容旧接口和旧页面提交的单条回复话术。"""
+        return [value] if isinstance(value, str) else value
+
+    @field_validator("*")
+    @classmethod
+    def validate_replies(cls, values: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for raw_value in values:
+            value = raw_value.strip()
+            if len(value) > 400:
+                raise ValueError("单条回复话术不能超过 400 个字符")
+            if value and value not in cleaned:
+                cleaned.append(value)
+        if not cleaned:
+            raise ValueError("回复话术不能为空")
+        return cleaned
+
+
+class GreetingAutomationUpdate(BaseModel):
+    enabled: bool
+    trigger_groups: GreetingTriggerGroups
+    reply_templates: GreetingReplyTemplates
+
+    @model_validator(mode="after")
+    def reject_cross_group_duplicates(self) -> "GreetingAutomationUpdate":
+        owners: dict[str, str] = {}
+        groups = self.trigger_groups.model_dump()
+        for greeting_type in GREETING_TYPES:
+            for phrase in groups[greeting_type]:
+                normalized = normalize_greeting_phrase(phrase)
+                previous = owners.get(normalized)
+                if previous is not None and previous != greeting_type:
+                    raise ValueError(f"触发语“{phrase}”不能同时属于多个分类")
+                owners[normalized] = greeting_type
+        return self
+
+
+class GreetingAutomationData(GreetingAutomationUpdate):
+    updated_at: datetime | None = None
 
 
 class ConnectorStatusData(BaseModel):

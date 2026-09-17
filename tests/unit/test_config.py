@@ -20,6 +20,42 @@ def test_settings_read_phase_one_environment(
     assert settings.llm_temperature == 0.4
 
 
+def test_pdd_response_timeout_defaults_to_160_and_allows_env_override(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("PDD_RESPONSE_TIMEOUT_SECONDS", raising=False)
+    assert Settings(_env_file=None).pdd_response_timeout_seconds == 160
+
+    monkeypatch.setenv("PDD_RESPONSE_TIMEOUT_SECONDS", "95")
+    assert Settings(_env_file=None).pdd_response_timeout_seconds == 95
+
+
+@pytest.mark.parametrize("value", [0, -1, "not-a-number"])
+def test_pdd_response_timeout_rejects_invalid_values(value: object) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, pdd_response_timeout_seconds=value)
+
+
+def test_rag_auto_reply_mode_defaults_and_overrides() -> None:
+    defaults = Settings(_env_file=None)
+    assert defaults.auto_reply_rag_mode == "calibrated"
+    assert defaults.auto_reply_rag_min_margin == 0.10
+
+    immediate = Settings(
+        _env_file=None,
+        auto_reply_rag_mode="immediate",
+        auto_reply_rag_min_margin=0.2,
+    )
+    assert immediate.auto_reply_rag_mode == "immediate"
+    assert immediate.auto_reply_rag_min_margin == 0.2
+
+
+@pytest.mark.parametrize("mode", ["always", "unsafe", ""])
+def test_rag_auto_reply_mode_rejects_unknown_values(mode: str) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, auto_reply_rag_mode=mode)
+
+
 def test_connection_urls_escape_passwords() -> None:
     settings = Settings(
         _env_file=None,

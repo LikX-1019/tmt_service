@@ -111,6 +111,20 @@ async def test_chat_page_is_served_by_fastapi() -> None:
 
 
 @pytest.mark.asyncio
+async def test_console_keeps_current_page_open_when_connector_starts() -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/assets/console/app.js")
+
+    assert response.status_code == 200
+    assert 'api(`/connector/${action}`' in response.text
+    assert "window.close()" not in response.text
+    assert "launcher-mode" not in response.text
+
+
+@pytest.mark.asyncio
 async def test_chat_demo_remains_available() -> None:
     """确认原聊天测试页仍可从独立地址访问。"""
     async with httpx.AsyncClient(

@@ -67,6 +67,27 @@ DOM_DIAGNOSTICS_SCRIPT = r"""
     };
   };
   const samples = selector => Array.from(document.querySelectorAll(selector)).slice(0, 8).map(describe);
+  const inputDiagnostics = Array.from(document.querySelectorAll('textarea, [contenteditable="true"]')).slice(0, 12).map(element => {
+    const rect = element.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const hit = rect.width > 0 && rect.height > 0 ? document.elementFromPoint(centerX, centerY) : null;
+    const style = getComputedStyle(element);
+    return {
+      tag: element.tagName.toLowerCase(),
+      id: element.id || null,
+      classes: Array.from(element.classList || []).slice(0, 12),
+      visible: style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0,
+      disabled: element.disabled === true,
+      readonly: element.readOnly === true,
+      editable: element.isContentEditable,
+      focused: document.activeElement === element,
+      rect: {x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height)},
+      hit_is_self: hit === element || Boolean(hit?.contains(element)),
+      hit_tag: hit?.tagName.toLowerCase() || null,
+      hit_classes: hit ? Array.from(hit.classList || []).slice(0, 12) : []
+    };
+  });
   return {
     url: safeUrl,
     element_count: document.querySelectorAll('*').length,
@@ -81,6 +102,7 @@ DOM_DIAGNOSTICS_SCRIPT = r"""
     current_conversation_matches: document.querySelectorAll('[data-random$="-reply"], [data-uid].chat-item, .chat-item[data-random]').length,
     current_message_matches: document.querySelectorAll('[data-message-id], [data-msg-id], .message-item, [class*="message-row"]').length,
     current_reply_matches: document.querySelectorAll('textarea#replyTextarea, textarea[placeholder*="回复"]').length,
+    input_diagnostics: inputDiagnostics,
     structural_samples: {
       conversation: samples('.chat-item, .chat-item-box, [data-random]'),
       message: samples('.onemsg, .msg-content-box, .chat-message-content, .merchantMessage, .buyer-item'),

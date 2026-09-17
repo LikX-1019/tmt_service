@@ -1,5 +1,9 @@
+from unittest.mock import AsyncMock
+
 import pytest
 
+from app.integrations.pdd.base import ConnectorStatus, ConnectorStatusSnapshot
+from app.integrations.pdd.playwright_connector import PddPlaywrightConnector
 from app.integrations.pdd.selectors import (
     COUNT_OUTBOUND_TEXT_SCRIPT,
     LATEST_OUTBOUND_TEXT_SCRIPT,
@@ -51,6 +55,63 @@ async def test_dom_contract_discovers_messages_and_confirms_send() -> None:
         assert await page.evaluate(COUNT_OUTBOUND_TEXT_SCRIPT, "在边缘区域") == 1
         latest = await page.evaluate(LATEST_OUTBOUND_TEXT_SCRIPT, "在边缘区域")
         assert latest["message_id"] == "m2"
+        await browser.close()
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_send_confirms_service_attitude_reminder() -> None:
+    playwright = pytest.importorskip("playwright.async_api")
+    manager = await playwright.async_playwright().start()
+    try:
+        try:
+            browser = await manager.chromium.launch(channel="chrome", headless=True)
+        except Exception as exc:
+            pytest.skip(f"系统 Chrome 不可用：{exc}")
+        page = await browser.new_page()
+        await page.set_content("""
+          <div class="reply-box">
+            <textarea id="replyTextarea"></textarea>
+            <button class="send-btn">发送</button>
+          </div>
+          <div id="reminder" class="el-message-box__wrapper" style="display: none">
+            <strong>服务态度提醒</strong>
+            <p>您已向当前消费者发送2条相同内容的消息，确认继续发送？</p>
+            <div id="continue-send" role="button">继续发送</div>
+            <button id="modify">去修改</button>
+          </div>
+          <div id="messages"></div>
+          <script>
+            document.querySelector('.send-btn').addEventListener('click', () => {
+              document.querySelector('#reminder').style.display = 'block';
+            });
+            document.querySelector('#continue-send').addEventListener('click', () => {
+              document.body.dataset.clicked = 'continue';
+              document.querySelector('#reminder').style.display = 'none';
+              const message = document.createElement('div');
+              message.className = 'message-item right';
+              message.dataset.messageId = 'confirmed-message';
+              message.textContent = document.querySelector('#replyTextarea').value;
+              document.querySelector('#messages').append(message);
+            });
+            document.querySelector('#modify').addEventListener('click', () => {
+              document.body.dataset.clicked = 'modify';
+            });
+          </script>
+        """)
+
+        connector = PddPlaywrightConnector()
+        connector._page = page
+        connector._snapshot = ConnectorStatusSnapshot(ConnectorStatus.READY)
+        connector._open_conversation = AsyncMock()
+
+        receipt = await connector.send_message("buyer-1", "您好，亲，我在的")
+
+        assert receipt.confirmed_at >= receipt.clicked_at
+        assert connector._snapshot.status == ConnectorStatus.READY
+        assert await page.locator("body").get_attribute("data-clicked") == "continue"
+        assert await page.locator("#messages").get_by_text("您好，亲，我在的").count() == 1
         await browser.close()
     finally:
         await manager.stop()

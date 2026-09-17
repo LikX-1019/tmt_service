@@ -82,6 +82,47 @@ def test_rag_requires_calibration_thresholds() -> None:
     assert decision.action == "auto_send"
 
 
+def test_immediate_rag_auto_sends_high_confidence_reviewed_answer() -> None:
+    decision = AutoReplyPolicy(
+        Calibration(),
+        rag_mode="immediate",
+        rag_score_threshold=0.35,
+        rag_min_margin=0.10,
+    ).evaluate(
+        "普通问题", result(route="rag"), {"goods_name": None}, allow_auto=True
+    )
+    assert decision.action == "auto_send"
+    assert decision.answer == "这是已审核的标准回答"
+
+
+def test_immediate_rag_rejects_small_candidate_margin() -> None:
+    ambiguous = result(route="rag")
+    ambiguous.trace_documents.append(
+        RetrievalDocument(
+            chunk_id="QA-2",
+            content="another answer",
+            metadata={"answer": "另一条标准回答"},
+            rerank_score=0.85,
+        )
+    )
+    decision = AutoReplyPolicy(
+        Calibration(),
+        rag_mode="immediate",
+        rag_score_threshold=0.35,
+        rag_min_margin=0.10,
+    ).evaluate("普通问题", ambiguous, {}, allow_auto=True)
+    assert decision.action == "suggest"
+    assert decision.reason == "RAG 候选区分度不足"
+
+
+def test_immediate_rag_respects_manual_takeover() -> None:
+    decision = AutoReplyPolicy(
+        Calibration(), rag_mode="immediate"
+    ).evaluate("普通问题", result(route="rag"), {}, allow_auto=False)
+    assert decision.action == "suggest"
+    assert decision.reason == "自动回复未启用"
+
+
 def test_calibration_requires_at_least_one_hundred_samples(tmp_path) -> None:
     rows = [
         {"top_score": 0.9, "margin": 0.4, "expected_qa": "a", "predicted_qa": "a"}

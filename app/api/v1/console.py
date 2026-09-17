@@ -21,14 +21,22 @@ from app.schemas.console import (
     ConversationView,
     CustomerListData,
     CustomerMessagesData,
+    GreetingAutomationData,
+    GreetingAutomationUpdate,
     OutboundJobView,
     ReplyRequest,
+    ShopSummaryView,
 )
 from app.services.console_runtime import ConsoleRuntime
 
 
 router = APIRouter(tags=["console"])
 Runtime = Annotated[ConsoleRuntime, Depends(get_console_runtime)]
+
+
+@router.get("/shop", response_model=ApiResponse[ShopSummaryView])
+async def shop_summary(runtime: Runtime) -> ApiResponse[ShopSummaryView]:
+    return ApiResponse(data=ShopSummaryView(**await runtime.shop_summary()))
 
 
 @router.get("/customers", response_model=ApiResponse[CustomerListData])
@@ -168,6 +176,35 @@ async def update_automation(
     request: AutomationUpdate, runtime: Runtime
 ) -> ApiResponse[AutomationData]:
     return ApiResponse(data=AutomationData(**await runtime.set_automation(request.enabled)))
+
+
+@router.get(
+    "/automation/greeting",
+    response_model=ApiResponse[GreetingAutomationData],
+)
+async def get_greeting_automation(
+    runtime: Runtime,
+) -> ApiResponse[GreetingAutomationData]:
+    return ApiResponse(
+        data=GreetingAutomationData(**await runtime.greeting_automation())
+    )
+
+
+@router.put(
+    "/automation/greeting",
+    response_model=ApiResponse[GreetingAutomationData],
+)
+async def update_greeting_automation(
+    request: GreetingAutomationUpdate, runtime: Runtime
+) -> ApiResponse[GreetingAutomationData]:
+    groups = request.trigger_groups.model_dump()
+    templates = request.reply_templates.model_dump()
+    result = await runtime.set_greeting_automation(
+        enabled=request.enabled,
+        trigger_groups=groups,
+        reply_templates=templates,
+    )
+    return ApiResponse(data=GreetingAutomationData(**result))
 
 
 def _sse(event: dict[str, object]) -> str:

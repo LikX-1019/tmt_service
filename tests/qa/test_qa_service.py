@@ -82,3 +82,26 @@ async def test_fallback_skips_answer_generator() -> None:
     assert result.route == "fallback"
     assert result.sources == []
     generator.generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_rag_uses_reviewed_standard_answer_when_generation_fails() -> None:
+    retrieved = [RetrievalDocument(chunk_id="QA-1", content="标准知识")]
+    reranked = [
+        RetrievalDocument(
+            chunk_id="QA-1",
+            content="标准知识",
+            metadata={"answer": "这是已审核的标准回答"},
+            rerank_score=0.9,
+        )
+    ]
+    service, _, _, generator = make_service(
+        retrieved=retrieved, reranked=reranked
+    )
+    generator.generate.side_effect = TimeoutError("provider unavailable")
+
+    result = await service.answer("相似问法")
+
+    assert result.route == "rag"
+    assert result.answer == "这是已审核的标准回答"
+    assert result.decision_factors["generation_fallback"] is True

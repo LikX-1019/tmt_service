@@ -27,6 +27,7 @@ from app.integrations.pdd.base import (
 )
 from app.services.message_asset_storage import MessageAssetStorage, UnsupportedAssetError
 from app.integrations.pdd.parser import parse_browser_message
+from app.integrations.pdd.workbench import build_workbench_init_script
 from app.integrations.pdd.selectors import (
     CONVERSATION_ITEM_SELECTORS,
     COUNT_OUTBOUND_TEXT_SCRIPT,
@@ -46,6 +47,32 @@ from app.integrations.pdd.selectors import (
 logger = logging.getLogger(__name__)
 
 
+def _message_backfill_flags(
+    raw_messages: list[dict[str, Any]],
+    *,
+    startup_backfill: bool,
+    already_synced: bool,
+    unread: int,
+) -> list[bool]:
+    """区分首次同步的历史消息与真正未读的新入站消息。"""
+    if startup_backfill:
+        return [True] * len(raw_messages)
+    if already_synced:
+        return [False] * len(raw_messages)
+    if unread <= 0:
+        return [True] * len(raw_messages)
+
+    live_indexes: set[int] = set()
+    for index in range(len(raw_messages) - 1, -1, -1):
+        direction = str(raw_messages[index].get("direction") or "inbound").lower()
+        if direction != "inbound":
+            continue
+        live_indexes.add(index)
+        if len(live_indexes) >= unread:
+            break
+    return [index not in live_indexes for index in range(len(raw_messages))]
+
+
 class PddPlaywrightConnector(CustomerServiceConnector):
     """只通过可见 DOM 收取和发送消息，不调用平台未公开接口。"""
 
@@ -60,6 +87,7 @@ class PddPlaywrightConnector(CustomerServiceConnector):
         self._on_profile: ProfileCallback | None = None
         self._on_status: StatusCallback | None = None
         self._send_lock = asyncio.Lock()
+        self._page_lock = asyncio.Lock()
         self._wake = asyncio.Event()
         self._seen: set[str] = set()
         self._conversation_activity: dict[str, str] = {}
@@ -80,7 +108,38 @@ class PddPlaywrightConnector(CustomerServiceConnector):
     async def diagnostics(self) -> dict[str, object]:
         """仅收集页面结构特征，严禁返回正文或 data 属性值。"""
         frames: list[dict[str, object]] = []
+        workbench: dict[str, object] = {
+            "mounted": False,
+            "resize_active": False,
+            "shield_active": False,
+            "left_panel_count": 0,
+            "right_panel_count": 0,
+        }
         if self._page and not self._page.is_closed():
+            try:
+                workbench_result = await self._page.evaluate(
+                    """
+                    () => {
+                      const host = document.getElementById('tmt-workbench-host');
+                      const root = host?.shadowRoot;
+                      const shield = root?.querySelector('.shield');
+                      return {
+                        mounted: Boolean(host && root),
+                        resize_active: host?.dataset.resizeActive === 'true',
+                        shield_active: Boolean(shield?.classList.contains('active')),
+                        left_panel_count: root?.querySelectorAll('.pane.left').length || 0,
+                        right_panel_count: root?.querySelectorAll('.pane.right').length || 0,
+                      };
+                    }
+                    """
+                )
+                if isinstance(workbench_result, dict):
+                    workbench.update(workbench_result)
+            except Exception:
+                logger.exception(
+                    "pdd_workbench_diagnostics_failed",
+                    extra={"event": "pdd_workbench_diagnostics_failed"},
+                )
             for index, frame in enumerate(self._page.frames):
                 try:
                     item = await frame.evaluate(DOM_DIAGNOSTICS_SCRIPT)
@@ -104,9 +163,32 @@ class PddPlaywrightConnector(CustomerServiceConnector):
                                 if isinstance(entry, dict)
                             ]
                     frames.append({"index": index, **item})
+        console_host = self._settings.app_host
+        if console_host in {"0.0.0.0", "::"}:
+            console_host = "127.0.0.1"
+        console_origin = f"http://{console_host}:{self._settings.app_port}"
+        console_reply_count = sum(
+            int(item.get("current_reply_matches") or 0)
+            for item in frames
+            if str(item.get("url") or "").startswith(console_origin)
+        )
+        native_reply_count = sum(
+            int(item.get("current_reply_matches") or 0)
+            for item in frames
+            if not str(item.get("url") or "").startswith(console_origin)
+        )
+        workbench["console_reply_input_count"] = console_reply_count
+        workbench["native_reply_input_count"] = native_reply_count
+        workbench["console_input_operable"] = bool(
+            console_reply_count and not workbench["shield_active"]
+        )
+        workbench["native_input_operable"] = bool(
+            native_reply_count and not workbench["shield_active"]
+        )
         return {
             "status": self._snapshot.status.value,
             "frames": frames,
+            "workbench": workbench,
             "activity_count": len(self._conversation_activity),
             "synced_conversation_count": len(self._synced_conversations),
             "seen_message_count": len(self._seen),
@@ -164,7 +246,9 @@ class PddPlaywrightConnector(CustomerServiceConnector):
             launch_kwargs: dict[str, Any] = {
                 "user_data_dir": str(profile),
                 "headless": False,
-                "args": ["--start-maximized"],
+                # macOS 上 --start-maximized 不可靠，会话恢复可能得到极小窗口；
+                # 用显式位置和尺寸保证专用窗口始终铺满主屏工作区。
+                "args": ["--window-position=0,30", "--window-size=1920,969"],
                 "no_viewport": True,
             }
             if self._settings.pdd_chrome_executable:
@@ -179,6 +263,13 @@ class PddPlaywrightConnector(CustomerServiceConnector):
             self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
             await self._page.expose_function("__codexPddWake", self._wake.set)
             await self._page.add_init_script(f"({MUTATION_OBSERVER_SCRIPT})()")
+            console_host = self._settings.app_host
+            if console_host in {"0.0.0.0", "::"}:
+                console_host = "127.0.0.1"
+            console_origin = f"http://{console_host}:{self._settings.app_port}"
+            await self._page.add_init_script(
+                build_workbench_init_script(console_origin)
+            )
             self._page.on("websocket", self._observe_websocket)
             self._page.on("crash", lambda: self._schedule_browser_error("页面已崩溃"))
             self._page.on("close", lambda: self._schedule_browser_error("页面已关闭"))
@@ -225,94 +316,121 @@ class PddPlaywrightConnector(CustomerServiceConnector):
         contract = await self._page.evaluate(DOM_CONTRACT_SCRIPT)
         if not isinstance(contract, dict) or not contract.get("conversation_root"):
             raise ConnectorError("客服页面会话列表不可用")
-        is_backfill = (
+        startup_backfill = (
             not self._initial_scan_complete or time.monotonic() < self._backfill_until
         )
+        skipped = 0
         for conversation in conversations:
             if not isinstance(conversation, dict):
                 continue
-            if conversation.get("contract_error"):
-                raise ConnectorError("会话选择器结果缺少唯一标识")
-            platform_customer_id = normalize_platform_customer_id(
-                conversation.get("platform_customer_id")
-                or conversation.get("conversation_id")
-                or ""
-            )
-            if not platform_customer_id:
-                raise ConnectorError("会话选择器结果缺少平台会话标识")
-            conversation["conversation_id"] = platform_customer_id
-            unread = int(conversation.get("unread") or 0)
-            conversation_id = platform_customer_id
-            dom_conversation_id = str(
-                conversation.get("dom_conversation_id") or platform_customer_id
-            )
-            self._platform_to_conversation[dom_conversation_id] = conversation_id
-            profile = (
-                str(conversation.get("display_name") or "顾客"),
-                str(conversation.get("avatar_url") or "") or None,
-            )
-            profile_changed = self._conversation_profiles.get(conversation_id) != profile
-            self._conversation_profiles[conversation_id] = profile
-            if self._on_profile and profile_changed:
-                await self._on_profile(
-                    CustomerProfile(
-                        platform_customer_id=platform_customer_id,
-                        display_name=profile[0],
-                        avatar_url=profile[1],
-                    )
-                )
-            activity_key = str(conversation.get("activity_key") or "")
-            activity_changed = (
-                self._conversation_activity.get(conversation_id) != activity_key
-            )
-            self._conversation_activity[conversation_id] = activity_key
-            if (
-                self._initial_scan_complete
-                and unread <= 0
-                and not conversation.get("active")
-                and not activity_changed
-                and conversation_id in self._synced_conversations
-            ):
-                continue
             try:
-                await self._open_conversation(conversation_id)
+                await self._scan_conversation(
+                    conversation, startup_backfill=startup_backfill
+                )
             except ConversationNotVisibleError:
                 # 拼多多会在接待状态变化时重排列表；下一轮重新扫描即可。
-                continue
-            panel_contract = await self._page.evaluate(DOM_CONTRACT_SCRIPT)
-            if not isinstance(panel_contract, dict) or not all(
-                panel_contract.get(key) for key in ("message_root", "reply_root")
-            ):
-                raise ConnectorError("客服会话消息区或回复区不可用")
-            raw_messages = await self._collect_current_messages(
-                conversation_id,
-                include_history=conversation_id not in self._synced_conversations,
-            )
-            for raw in raw_messages if isinstance(raw_messages, list) else []:
-                if not isinstance(raw, dict):
-                    continue
-                raw["display_name"] = conversation.get("display_name") or "顾客"
-                raw["avatar_url"] = conversation.get("avatar_url")
-                await self._materialize_assets(raw)
-                message = parse_browser_message(
-                    raw,
-                    is_backfill=(
-                        is_backfill
-                        or conversation_id not in self._synced_conversations
-                    ),
+                skipped += 1
+            except Exception as exc:
+                skipped += 1
+                customer_id = normalize_platform_customer_id(
+                    conversation.get("platform_customer_id")
+                    or conversation.get("conversation_id")
+                    or ""
                 )
-                if message.fingerprint in self._seen:
-                    continue
-                self._seen.add(message.fingerprint)
-                if self._on_message:
-                    try:
-                        await self._on_message(message)
-                    except Exception:
-                        self._seen.discard(message.fingerprint)
-                        raise
-            self._synced_conversations.add(conversation_id)
+                logger.exception(
+                    "pdd_conversation_scan_skipped",
+                    extra={
+                        "event": "pdd_conversation_scan_skipped",
+                        "customer_id_hash": sha256(customer_id.encode()).hexdigest()[:12]
+                        if customer_id
+                        else None,
+                        "error": str(exc)[:200],
+                    },
+                )
         self._initial_scan_complete = True
-        await self._set_status(ConnectorStatus.READY, "消息监听正常")
+        detail = "消息监听正常"
+        if skipped:
+            detail = f"消息监听正常，{skipped} 个会话等待重试"
+        await self._set_status(ConnectorStatus.READY, detail)
+
+    async def _scan_conversation(
+        self, conversation: dict[str, Any], *, startup_backfill: bool
+    ) -> None:
+        if conversation.get("contract_error"):
+            raise ConnectorError("会话选择器结果缺少唯一标识")
+        platform_customer_id = normalize_platform_customer_id(
+            conversation.get("platform_customer_id")
+            or conversation.get("conversation_id")
+            or ""
+        )
+        if not platform_customer_id:
+            raise ConnectorError("会话选择器结果缺少平台会话标识")
+        conversation["conversation_id"] = platform_customer_id
+        unread = int(conversation.get("unread") or 0)
+        conversation_id = platform_customer_id
+        dom_conversation_id = str(
+            conversation.get("dom_conversation_id") or platform_customer_id
+        )
+        self._platform_to_conversation[dom_conversation_id] = conversation_id
+        profile = (
+            str(conversation.get("display_name") or "顾客"),
+            str(conversation.get("avatar_url") or "") or None,
+        )
+        profile_changed = self._conversation_profiles.get(conversation_id) != profile
+        self._conversation_profiles[conversation_id] = profile
+        if self._on_profile and profile_changed:
+            await self._on_profile(
+                CustomerProfile(
+                    platform_customer_id=platform_customer_id,
+                    display_name=profile[0],
+                    avatar_url=profile[1],
+                )
+            )
+        activity_key = str(conversation.get("activity_key") or "")
+        activity_changed = self._conversation_activity.get(conversation_id) != activity_key
+        self._conversation_activity[conversation_id] = activity_key
+        if (
+            self._initial_scan_complete
+            and unread <= 0
+            and not conversation.get("active")
+            and not activity_changed
+            and conversation_id in self._synced_conversations
+        ):
+            return
+        await self._open_conversation(conversation_id)
+        panel_contract = await self._page.evaluate(DOM_CONTRACT_SCRIPT)
+        if not isinstance(panel_contract, dict) or not panel_contract.get("message_root"):
+            raise ConnectorError("客服会话消息区不可用")
+        already_synced = conversation_id in self._synced_conversations
+        raw_messages = await self._collect_current_messages(
+            conversation_id,
+            include_history=not already_synced,
+        )
+        if not isinstance(raw_messages, list):
+            raw_messages = []
+        backfill_flags = _message_backfill_flags(
+            raw_messages,
+            startup_backfill=startup_backfill,
+            already_synced=already_synced,
+            unread=unread,
+        )
+        for raw, is_backfill in zip(raw_messages, backfill_flags, strict=True):
+            if not isinstance(raw, dict):
+                continue
+            raw["display_name"] = conversation.get("display_name") or "顾客"
+            raw["avatar_url"] = conversation.get("avatar_url")
+            await self._materialize_assets(raw)
+            message = parse_browser_message(raw, is_backfill=is_backfill)
+            if message.fingerprint in self._seen:
+                continue
+            self._seen.add(message.fingerprint)
+            if self._on_message:
+                try:
+                    await self._on_message(message)
+                except Exception:
+                    self._seen.discard(message.fingerprint)
+                    raise
+        self._synced_conversations.add(conversation_id)
 
     async def _materialize_assets(self, raw: dict[str, Any]) -> None:
         """使用已登录浏览器下载媒体；失败时截取单条消息节点作为兜底。"""
@@ -482,6 +600,8 @@ class PddPlaywrightConnector(CustomerServiceConnector):
 
     async def _dismiss_blocking_dialog(self) -> None:
         """只关闭唯一、可识别的标准弹窗，其他覆盖层保持失败即停。"""
+        if await self._confirm_duplicate_message_reminder():
+            return
         dialogs = self._page.locator(".el-dialog__wrapper:visible")
         dialog_count = await dialogs.count()
         if dialog_count == 0:
@@ -508,7 +628,8 @@ class PddPlaywrightConnector(CustomerServiceConnector):
                 except TimeoutError:
                     pass
                 self._wake.clear()
-                await self._scan_once()
+                async with self._page_lock:
+                    await self._scan_once()
                 failures = 0
             except asyncio.CancelledError:
                 raise
@@ -529,6 +650,50 @@ class PddPlaywrightConnector(CustomerServiceConnector):
                 raise ConnectorError("页面关键控件不唯一")
         raise ConnectorError("页面关键控件不可用")
 
+    async def _confirm_duplicate_message_reminder(self) -> bool:
+        reminders = self._page.locator(
+            ".goodsDescRemindPopover:visible, "
+            ".el-message-box__wrapper:visible, "
+            ".el-dialog__wrapper:visible, "
+            ".el-popover:visible, "
+            "[role='dialog']:visible"
+        ).filter(has_text="相同内容").filter(has_text="继续发送")
+        if await reminders.count() == 0:
+            return False
+        buttons = reminders.locator(
+            "button:visible, [role='button']:visible, .el-button:visible"
+        ).filter(has_text="继续发送")
+        if await buttons.count() == 0:
+            buttons = reminders.get_by_text("继续发送", exact=True)
+        if await buttons.count() == 0:
+            return False
+        await buttons.first.click(timeout=2000)
+        logger.info(
+            "pdd_duplicate_message_reminder_confirmed",
+            extra={"event": "pdd_duplicate_message_reminder_confirmed"},
+        )
+        return True
+
+    async def _wait_for_send_confirmation(
+        self, content: str, previous_count: int
+    ) -> None:
+        """等待发送回显，并自动确认拼多多的重复内容提醒。"""
+        deadline = time.monotonic() + 8.0
+        reminder_confirmed = False
+
+        while time.monotonic() < deadline:
+            current_count = await self._page.evaluate(
+                COUNT_OUTBOUND_TEXT_SCRIPT, content
+            )
+            if int(current_count or 0) > previous_count:
+                return
+
+            if not reminder_confirmed:
+                reminder_confirmed = await self._confirm_duplicate_message_reminder()
+            await asyncio.sleep(0.05)
+
+        raise TimeoutError("页面未出现发送回显")
+
     async def send_message(
         self, platform_conversation_id: str, content: str
     ) -> SendReceipt:
@@ -536,7 +701,7 @@ class PddPlaywrightConnector(CustomerServiceConnector):
             raise ConnectorError("回复内容长度必须为 1 到 400 个字符")
         if self._snapshot.status != ConnectorStatus.READY:
             raise ConnectorError("连接器未就绪")
-        async with self._send_lock:
+        async with self._send_lock, self._page_lock:
             content = content.strip()
             try:
                 await self._open_conversation(platform_conversation_id)
@@ -545,34 +710,16 @@ class PddPlaywrightConnector(CustomerServiceConnector):
                 before = await self._page.evaluate(COUNT_OUTBOUND_TEXT_SCRIPT, content)
                 await textarea.fill(content)
             except Exception as exc:
-                await self._set_status(
-                    ConnectorStatus.DEGRADED, "发送控件异常，自动回复已暂停"
-                )
                 if isinstance(exc, ConnectorError):
                     raise
                 raise ConnectorError("发送前页面操作失败") from exc
             clicked_at = datetime.now(timezone.utc)
             try:
                 await button.click()
+                await self._wait_for_send_confirmation(content, before)
             except Exception as exc:
-                await self._set_status(
-                    ConnectorStatus.DEGRADED, "发送结果无法确认，自动回复已暂停"
-                )
                 raise SendUncertainError(
                     "发送点击结果无法确认", clicked_at=clicked_at
-                ) from exc
-            try:
-                await self._page.wait_for_function(
-                    f"(args) => (({COUNT_OUTBOUND_TEXT_SCRIPT})(args.value)) > args.previous",
-                    arg={"value": content, "previous": before},
-                    timeout=5000,
-                )
-            except Exception as exc:
-                await self._set_status(
-                    ConnectorStatus.DEGRADED, "发送结果无法确认，自动回复已暂停"
-                )
-                raise SendUncertainError(
-                    "页面未出现发送回显", clicked_at=clicked_at
                 ) from exc
             responder_name = None
             try:

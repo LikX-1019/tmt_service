@@ -5,9 +5,21 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>拼多多智能客服工作台</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/assets/console/app.css?v=20260915-2">
+  <link rel="stylesheet" href="/assets/console/app.css?v=20260917-5">
 </head>
 <body>
+  <main id="shopWorkspace" class="shop-workspace hidden">
+    <header><span class="shop-workspace-mark">店</span><div><strong>店铺中心</strong><small>多店铺接待入口</small></div></header>
+    <section class="shop-workspace-list">
+      <button class="shop-workspace-item active" type="button">
+        <span id="shopAvatar" class="shop-workspace-avatar">拼</span>
+        <span class="shop-workspace-copy"><b id="shopName">拼多多店铺</b><small id="shopStatus">正在连接</small></span>
+        <em id="shopPendingCount">0</em>
+      </button>
+      <button class="shop-workspace-add" type="button" disabled>＋ 接入新店铺</button>
+    </section>
+    <footer><span>当前版本支持 1 家店铺</span><small>后续店铺将在这里切换</small></footer>
+  </main>
   <header class="topbar">
     <div class="brand">
       <span class="brand-mark">客</span>
@@ -67,14 +79,28 @@
         <div id="decisionContent" class="decision-empty">系统建议会显示在这里。自动发送只会使用已审核的标准答案。</div>
         <button id="useSuggestion" class="button secondary full hidden">采用建议</button>
       </section>
+      <section class="detail-card greeting-card">
+        <div class="card-title"><span>问候自动回复</span><em id="greetingUpdatedAt">未读取</em></div>
+        <form id="greetingForm" class="greeting-form">
+          <label class="control-line">
+            <span><b>启用一般问候识别</b><small>规则优先命中，未命中时模型兜底</small></span>
+            <input id="greetingEnabled" type="checkbox">
+          </label>
+          <div id="greetingGroups" class="greeting-groups"></div>
+          <div class="greeting-actions">
+            <button id="greetingReset" class="button ghost" type="button">恢复默认</button>
+            <button id="greetingSave" class="button primary" type="submit">保存并立即生效</button>
+          </div>
+        </form>
+      </section>
       <section class="detail-card controls-card">
         <div class="card-title"><span>会话控制</span></div>
         <label class="control-line"><span><b>该会话自动接待</b><small id="conversationModeNote">选择会话后设置接待方式</small></span><input id="conversationAutomation" type="checkbox" disabled></label>
-        <div class="safety-note"><strong>安全发送</strong><p>发送任务串行执行。点击后无法确认时不会重试，并会暂停全局自动接待。</p></div>
+        <div class="safety-note"><strong>安全发送</strong><p>发送任务串行执行。点击后无法确认时不会重试，只会转由人工处理当前会话。</p></div>
       </section>
     </aside>
   </main>
   <div id="toast" class="toast" role="status"></div>
-  <script type="module" src="/assets/console/app.js?v=20260916-5"></script>
+  <script type="module" src="/assets/console/app.js?v=20260917-5"></script>
 </body>
 </html>

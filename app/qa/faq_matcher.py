@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
@@ -20,6 +21,16 @@ class FAQMatch:
 
 def _context_value(value: object) -> str:
     return str(value or "").strip().lower()
+
+
+def _normalize_name(value: str | None) -> str:
+    return re.sub(r"\W+", "", (value or "").lower())
+
+
+def _name_compatible(item_name: object, context_name: str) -> bool:
+    left = _normalize_name(str(item_name or ""))
+    right = _normalize_name(context_name)
+    return bool(left and right and (left in right or right in left))
 
 
 class FAQMatcher:
@@ -47,6 +58,7 @@ class FAQMatcher:
         product_code: str | None = None,
         service_stage: str | None = None,
         knowledge_version: str | None = None,
+        product_name: str | None = None,
     ) -> FAQMatch:
         """按商品、阶段和版本解析 exact match；同优先级多条视为歧义。"""
         candidates = list(self._index.get(self._normalizer.normalize(query), []))
@@ -91,6 +103,42 @@ class FAQMatcher:
                     candidates=matched,
                 )
 
+        # 商品编码唯一命中时允许阶段缺省：拼多多连接器只能稳定拿到商品卡片，
+        # 无法可靠判定售前/售后；同一商品同问法唯一时优先于通用知识。
+        if product:
+            matched = [
+                item
+                for item in compatible
+                if _context_value(item.metadata.get("product_id")) == product
+            ]
+            if len(matched) == 1:
+                return FAQMatch(item=matched[0], match_score=1.0, candidates=matched)
+            if len(matched) > 1:
+                return FAQMatch(
+                    match_score=1.0,
+                    ambiguous=True,
+                    reason="ambiguous_exact_match",
+                    candidates=matched,
+                )
+
+        # 平台数字商品 ID 与内部编码不一致时，用商品名称做双向包含匹配；
+        # 多条命中仍视为歧义，不会任选一条。
+        if product_name:
+            matched = [
+                item
+                for item in compatible
+                if _name_compatible(item.metadata.get("product_name"), product_name)
+            ]
+            if len(matched) == 1:
+                return FAQMatch(item=matched[0], match_score=1.0, candidates=matched)
+            if len(matched) > 1:
+                return FAQMatch(
+                    match_score=1.0,
+                    ambiguous=True,
+                    reason="ambiguous_exact_match",
+                    candidates=matched,
+                )
+
         reason = "missing_product_context" if not product and any(
             _context_value(item.metadata.get("product_id")) for item in compatible
         ) else "context_mismatch"
@@ -103,12 +151,14 @@ class FAQMatcher:
         product_code: str | None = None,
         service_stage: str | None = None,
         knowledge_version: str | None = None,
+        product_name: str | None = None,
     ) -> FAQItem | None:
         return self.resolve(
             query,
             product_code=product_code,
             service_stage=service_stage,
             knowledge_version=knowledge_version,
+            product_name=product_name,
         ).item
 
     def __len__(self) -> int:

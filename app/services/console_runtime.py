@@ -9,6 +9,7 @@ from datetime import date, datetime
 from hashlib import sha256
 from typing import Any, Awaitable, Callable
 
+from app.agent.greeting import default_reply_templates, default_trigger_groups
 from app.agent.service import CustomerContext, CustomerServiceAgent
 from app.core.config import Settings, get_settings
 from app.core.exceptions import (
@@ -65,7 +66,12 @@ class ConsoleRuntime:
             min_precision=self._settings.auto_reply_min_precision,
             min_samples=self._settings.auto_reply_min_samples,
         )
-        self._policy = AutoReplyPolicy(calibration)
+        self._policy = AutoReplyPolicy(
+            calibration,
+            rag_mode=self._settings.auto_reply_rag_mode,
+            rag_score_threshold=self._settings.rag_score_threshold,
+            rag_min_margin=self._settings.auto_reply_rag_min_margin,
+        )
         self._asset_storage = MessageAssetStorage(
             self._settings.message_asset_dir,
             max_bytes=self._settings.message_asset_max_bytes,
@@ -131,7 +137,13 @@ class ConsoleRuntime:
     ) -> dict[str, Any]:
         """SSE 事件只持久化刷新所需字段，避免把聊天正文保存 90 天。"""
         fields = {
-            "conversation.upserted": {"id", "state", "unread_count"},
+            "conversation.upserted": {
+                "id",
+                "state",
+                "unread_count",
+                "response_started_at",
+                "response_deadline_at",
+            },
             "message.created": {
                 "id",
                 "conversation_id",
@@ -221,7 +233,9 @@ class ConsoleRuntime:
         assert self._shop is not None
         payload = asdict(message)
         conversation, stored, inserted = await self._repository.ingest_message(
-            self._shop["id"], payload
+            self._shop["id"],
+            payload,
+            response_timeout_seconds=self._settings.pdd_response_timeout_seconds,
         )
         if not inserted:
             return
@@ -286,6 +300,18 @@ class ConsoleRuntime:
         batch_key = sha256("|".join(message.fingerprint for message in batch).encode()).hexdigest()
         decision_payload: dict[str, Any] | None = None
         try:
+            greeting_config = await self._repository.get_greeting_config(str(shop["id"]))
+        except Exception:
+            logger.exception(
+                "greeting_config_load_failed",
+                extra={"event": "greeting_config_load_failed"},
+            )
+            greeting_config = {
+                "enabled": True,
+                "trigger_groups": default_trigger_groups(),
+                "reply_templates": default_reply_templates(),
+            }
+        try:
             agent_reply = await self._agent.run(
                 query,
                 CustomerContext(
@@ -299,6 +325,7 @@ class ConsoleRuntime:
                     goods_id=str(conversation.get("goods_id") or "") or None,
                     goods_name=str(conversation.get("goods_name") or "") or None,
                 ),
+                greeting_config=greeting_config,
             )
         except Exception:
             # 意图模型不可用时保留既有 QA/RAG 降级路径，不让新增分支阻断接待。
@@ -308,12 +335,28 @@ class ConsoleRuntime:
             )
         else:
             if agent_reply.intent == "daily_greeting" and agent_reply.answer:
+                blockers: list[str] = []
+                if not shop or not shop["global_auto_reply_enabled"]:
+                    blockers.append("全局自动接待未开启")
+                if not conversation["auto_reply_enabled"]:
+                    blockers.append("当前会话为人工接待")
+                if status.status != ConnectorStatus.READY:
+                    blockers.append("拼多多连接器未就绪")
+                source_label = (
+                    "规则" if agent_reply.recognition_source == "rule" else "模型"
+                )
                 decision_payload = {
                     "batch_key": batch_key,
                     "route": "greeting",
                     "action": "auto_send" if allow_auto else "suggest",
+                    "greeting_type": agent_reply.greeting_type,
+                    "recognition_source": agent_reply.recognition_source,
                     "top_score": agent_reply.confidence,
-                    "risk_reason": "日常打招呼由小满客服生成",
+                    "risk_reason": (
+                        f"{source_label}识别为一般问候，已进入自动发送队列"
+                        if allow_auto
+                        else f"{source_label}识别为一般问候；{'；'.join(blockers)}，仅生成建议"
+                    ),
                     "suggested_answer": agent_reply.answer,
                     "policy_version": self._settings.auto_reply_policy_version,
                 }
@@ -324,6 +367,7 @@ class ConsoleRuntime:
                 result = await qa_service.answer(
                     query,
                     product_code=str(conversation.get("goods_id") or "") or None,
+                    product_name=str(conversation.get("goods_name") or "") or None,
                 )
                 policy = self._policy.evaluate(
                     query, result, conversation, allow_auto=allow_auto
@@ -355,7 +399,9 @@ class ConsoleRuntime:
         if decision.get("action") == "auto_send" and decision.get("suggested_answer"):
             job, created = await self._repository.create_outbound_job(
                 conversation_id,
-                client_request_id=f"auto:{batch_key}",
+                # outbound_jobs.client_request_id 最长 64；保留 59 位哈希仍有
+                # 236 bit 幂等空间，同时避免 MySQL 因 5 位前缀溢出而拒绝入队。
+                client_request_id=f"auto:{batch_key[:59]}",
                 source="auto",
                 content=str(decision["suggested_answer"])[:400],
             )
@@ -427,12 +473,20 @@ class ConsoleRuntime:
         await self._emit("outbound.updated", job)
 
     async def _pause_after_send_failure(self, job: dict[str, Any]) -> None:
-        if self._shop:
-            await self._repository.set_global_automation(self._shop["id"], False)
-            await self._emit(
-                "automation.updated",
-                {"enabled": False, "reason": "发送失败，自动回复已安全暂停"},
+        conversation_id = str(job.get("conversation_id") or "")
+        if not conversation_id:
+            return
+        try:
+            conversation = await self._repository.set_conversation_automation(
+                conversation_id, False
             )
+        except LookupError:
+            logger.exception(
+                "failed_conversation_pause_failed",
+                extra={"event": "failed_conversation_pause_failed"},
+            )
+            return
+        await self._emit("conversation.upserted", conversation)
 
     async def list_conversations(
         self, *, limit: int, state: str | None, search: str | None, before: datetime | None
@@ -442,6 +496,15 @@ class ConsoleRuntime:
         return await self._repository.list_conversations(
             self._shop["id"], limit=limit, state=state, search=search, before=before
         )
+
+    async def shop_summary(self) -> dict[str, str]:
+        await self.ensure_initialized()
+        assert self._shop is not None
+        return {
+            "id": str(self._shop["id"]),
+            "platform": str(self._shop["platform"]),
+            "name": str(self._shop["name"]),
+        }
 
     async def list_customers(
         self, *, limit: int, search: str | None
@@ -533,6 +596,37 @@ class ConsoleRuntime:
         assert self._shop is not None
         shop = await self._repository.get_shop(self._shop["id"])
         return {"enabled": bool(shop and shop["global_auto_reply_enabled"])}
+
+    async def greeting_automation(self) -> dict[str, Any]:
+        await self.ensure_initialized()
+        assert self._shop is not None
+        try:
+            return await self._repository.get_greeting_config(self._shop["id"])
+        except LookupError as exc:
+            raise ResourceNotFoundError(str(exc)) from exc
+
+    async def set_greeting_automation(
+        self,
+        *,
+        enabled: bool,
+        trigger_groups: dict[str, list[str]],
+        reply_templates: dict[str, list[str]],
+    ) -> dict[str, Any]:
+        await self.ensure_initialized()
+        assert self._shop is not None
+        try:
+            result = await self._repository.update_greeting_config(
+                self._shop["id"],
+                enabled=enabled,
+                trigger_groups=trigger_groups,
+                reply_templates=reply_templates,
+            )
+        except LookupError as exc:
+            raise ResourceNotFoundError(str(exc)) from exc
+        await self._emit(
+            "greeting.automation.updated", {"enabled": result["enabled"]}
+        )
+        return result
 
     async def set_automation(self, enabled: bool) -> dict[str, Any]:
         await self.ensure_initialized()

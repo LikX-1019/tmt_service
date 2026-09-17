@@ -21,6 +21,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.agent.greeting import default_reply_templates, default_trigger_groups
 from app.models.base import Base
 
 
@@ -59,6 +60,29 @@ class Shop(Base):
     )
     agent_accounts: Mapped[list[AgentAccount]] = relationship(
         back_populates="shop", cascade="all, delete-orphan"
+    )
+
+
+class ShopGreetingConfig(Base):
+    """店铺级一般问候触发语和固定回复配置。"""
+
+    __tablename__ = "shop_greeting_configs"
+
+    shop_id: Mapped[str] = mapped_column(
+        ForeignKey("shops.id", ondelete="CASCADE"), primary_key=True
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    trigger_groups: Mapped[dict[str, list[str]]] = mapped_column(
+        JSON, default=default_trigger_groups, nullable=False
+    )
+    reply_templates: Mapped[dict[str, list[str]]] = mapped_column(
+        JSON, default=default_reply_templates, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
     )
 
 
@@ -129,6 +153,7 @@ class Conversation(Base):
             "shop_id", "platform_conversation_id", name="uq_conversation_platform"
         ),
         Index("ix_conversations_last_message", "last_message_at"),
+        Index("ix_conversations_response_deadline", "response_deadline_at"),
         Index("ix_conversations_state", "state"),
     )
 
@@ -151,6 +176,8 @@ class Conversation(Base):
     auto_reply_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     unread_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    response_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    response_deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, nullable=False
     )
@@ -287,6 +314,8 @@ class ReplyDecision(Base):
     batch_key: Mapped[str] = mapped_column(String(64), nullable=False)
     route: Mapped[str] = mapped_column(String(32), nullable=False)
     action: Mapped[str] = mapped_column(String(32), nullable=False)
+    greeting_type: Mapped[str | None] = mapped_column(String(32))
+    recognition_source: Mapped[str | None] = mapped_column(String(16))
     qa_code: Mapped[str | None] = mapped_column(String(128))
     top_score: Mapped[float | None] = mapped_column(Float)
     score_margin: Mapped[float | None] = mapped_column(Float)

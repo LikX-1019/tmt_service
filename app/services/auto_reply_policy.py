@@ -90,8 +90,22 @@ def wilson_lower_bound(correct: int, total: int, confidence: float = 0.95) -> fl
 class AutoReplyPolicy:
     """自动发送只使用已审核标准回答，生成式结果仅作为人工建议。"""
 
-    def __init__(self, calibration: Calibration) -> None:
+    def __init__(
+        self,
+        calibration: Calibration,
+        *,
+        rag_mode: str = "calibrated",
+        rag_score_threshold: float = 0.35,
+        rag_min_margin: float = 0.10,
+    ) -> None:
+        if rag_mode not in {"suggest_only", "calibrated", "immediate"}:
+            raise ValueError(f"不支持的 RAG 自动回复模式：{rag_mode}")
+        if rag_min_margin < 0:
+            raise ValueError("RAG 自动回复候选差值不能为负数")
         self._calibration = calibration
+        self._rag_mode = rag_mode
+        self._rag_score_threshold = rag_score_threshold
+        self._rag_min_margin = rag_min_margin
 
     def evaluate(
         self,
@@ -181,7 +195,26 @@ class AutoReplyPolicy:
                 result.route, "auto_send", standard_answer, qa_code, score, margin, None
             )
         if result.route == "rag":
-            if not self._calibration.enabled:
+            if self._rag_mode == "suggest_only":
+                reason = "RAG 自动发送已关闭"
+            elif self._rag_mode == "immediate":
+                if score is None or score < self._rag_score_threshold:
+                    reason = "RAG top1 分数不足"
+                elif margin is None or margin < self._rag_min_margin:
+                    reason = "RAG 候选区分度不足"
+                elif not standard_answer:
+                    reason = "候选缺少标准回答"
+                else:
+                    return PolicyDecision(
+                        result.route,
+                        "auto_send",
+                        standard_answer,
+                        qa_code,
+                        score,
+                        margin,
+                        None,
+                    )
+            elif not self._calibration.enabled:
                 reason = "RAG 校准未达到自动发送门槛"
             elif score is None or score < self._calibration.score_threshold:
                 reason = "RAG top1 分数不足"

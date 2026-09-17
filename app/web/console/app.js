@@ -1,3 +1,8 @@
+const embedMode = new URLSearchParams(window.location.search).get("embed");
+if (["shops", "console"].includes(embedMode)) {
+  document.body.classList.add(`embed-${embedMode}`);
+}
+
 const state = {
   conversations: [], activeId: null, filter: "", search: "",
   connector: "stopped", globalAutomation: false, detailRequest: 0,
@@ -10,8 +15,61 @@ const els = {
   hint: $("sendHint"), charCount: $("charCount"), connectorPill: $("connectorPill"),
   connectorButton: $("connectorButton"), globalAuto: $("globalAutomation"), convAuto: $("conversationAutomation"),
   goods: $("goodsContext"), goodsTag: $("goodsTag"), decision: $("decisionContent"),
-  decisionRoute: $("decisionRoute"), useSuggestion: $("useSuggestion"), toast: $("toast")
+  decisionRoute: $("decisionRoute"), useSuggestion: $("useSuggestion"), toast: $("toast"),
+  shopWorkspace: $("shopWorkspace"), shopName: $("shopName"), shopStatus: $("shopStatus"),
+  shopPendingCount: $("shopPendingCount"), shopAvatar: $("shopAvatar"),
+  greetingForm: $("greetingForm"), greetingEnabled: $("greetingEnabled"),
+  greetingGroups: $("greetingGroups"), greetingUpdatedAt: $("greetingUpdatedAt"),
+  greetingReset: $("greetingReset"), greetingSave: $("greetingSave")
 };
+
+const GREETING_META = {
+  salutation: { label: "问候" },
+  availability: { label: "询问在线" },
+  thanks: { label: "致谢" },
+  goodbye: { label: "告别" }
+};
+const DEFAULT_GREETING = {
+  enabled: true,
+  trigger_groups: {
+    salutation: ["你好", "您好", "哈喽", "嗨"],
+    availability: ["在吗", "有人吗", "客服在吗"],
+    thanks: ["谢谢", "辛苦了", "感谢"],
+    goodbye: ["再见", "拜拜", "先这样"]
+  },
+  reply_templates: {
+    salutation: [
+      "您好，亲，请问有什么可以帮您？",
+      "您好呀，亲，有什么问题都可以告诉我。",
+      "亲，您好，我在这里，请问需要了解什么呢？",
+      "您好，欢迎咨询，请问有什么可以为您解答？",
+      "您好呀，很高兴为您服务，请问您想咨询什么？"
+    ],
+    availability: [
+      "您好，亲，我在的，请问有什么可以帮您？",
+      "在的，亲，您有什么问题可以直接告诉我。",
+      "您好，我在线的，请问您想咨询什么呢？",
+      "亲，在呢，有什么需要我帮您看看的吗？",
+      "我在的，您请说，我马上帮您处理。"
+    ],
+    thanks: [
+      "不客气，亲，很高兴能帮到您。",
+      "不用客气，这是我们应该做的。",
+      "亲，不客气，能帮到您就好。",
+      "感谢您的认可，有需要随时联系我们。",
+      "不客气呀，祝您购物愉快！"
+    ],
+    goodbye: [
+      "好的，亲，感谢您的咨询，祝您生活愉快！",
+      "好的，有需要随时联系我们，祝您生活愉快！",
+      "感谢您的咨询，祝您每天都有好心情！",
+      "好的，亲，那就先不打扰您啦，祝您一切顺利！",
+      "很高兴为您服务，期待下次再见！"
+    ]
+  }
+};
+
+if (embedMode === "shops") els.shopWorkspace.classList.remove("hidden");
 
 async function api(path, options = {}) {
   const response = await fetch(`/api/v1${path}`, {
@@ -41,6 +99,95 @@ function fmtTime(value) {
     : date.toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
 }
 
+function timestamp(value) {
+  if (!value) return null;
+  const normalized = /(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? value : `${value}Z`;
+  const parsed = new Date(normalized).getTime();
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function compareConversations(left, right) {
+  const leftDeadline = timestamp(left.response_deadline_at);
+  const rightDeadline = timestamp(right.response_deadline_at);
+  if (leftDeadline != null && rightDeadline != null && leftDeadline !== rightDeadline) {
+    return leftDeadline - rightDeadline;
+  }
+  if (leftDeadline != null) return -1;
+  if (rightDeadline != null) return 1;
+  const lastMessageDifference = (timestamp(right.last_message_at) || 0) - (timestamp(left.last_message_at) || 0);
+  return lastMessageDifference || String(right.id).localeCompare(String(left.id));
+}
+
+function formatDuration(totalSeconds) {
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainder = seconds % 60;
+  const parts = hours > 0 ? [hours, minutes, remainder] : [minutes, remainder];
+  return parts.map((part) => String(part).padStart(2, "0")).join(":");
+}
+
+function responseTimerState(conversation, now = Date.now()) {
+  const deadline = timestamp(conversation?.response_deadline_at);
+  if (deadline == null) return null;
+  const milliseconds = deadline - now;
+  if (milliseconds > 0) {
+    const seconds = Math.ceil(milliseconds / 1000);
+    const level = seconds > 60 ? "normal" : (seconds > 30 ? "warning" : "danger");
+    return {
+      level,
+      text: `剩余 ${formatDuration(seconds)}`,
+      label: `回复剩余时间 ${formatDuration(seconds)}`,
+    };
+  }
+  const seconds = Math.floor(Math.abs(milliseconds) / 1000);
+  return {
+    level: "overdue",
+    text: `已超时 ${formatDuration(seconds)}`,
+    label: `回复已超时 ${formatDuration(seconds)}`,
+  };
+}
+
+function updateTimerNode(element, conversation, now = Date.now()) {
+  const timer = responseTimerState(conversation, now);
+  if (!timer) {
+    element.remove();
+    return;
+  }
+  element.className = `response-timer ${timer.level}${element.dataset.variant === "header" ? " header-timer" : ""}`;
+  element.textContent = element.dataset.variant === "header" ? `回复倒计时 ${timer.text.replace("剩余 ", "")}` : timer.text;
+  element.setAttribute("aria-label", timer.label);
+}
+
+function responseTimerNode(conversation, variant = "list") {
+  if (!conversation?.response_deadline_at) return null;
+  const element = node("span", "response-timer");
+  element.dataset.responseTimer = conversation.id;
+  element.dataset.variant = variant;
+  element.setAttribute("role", "timer");
+  updateTimerNode(element, conversation);
+  return element;
+}
+
+function updateResponseTimers() {
+  const now = Date.now();
+  const byId = new Map(state.conversations.map((item) => [item.id, item]));
+  document.querySelectorAll("[data-response-timer]").forEach((element) => {
+    const conversation = byId.get(element.dataset.responseTimer);
+    if (conversation) updateTimerNode(element, conversation, now);
+  });
+
+  state.conversations.sort(compareConversations);
+  const buttons = new Map(
+    [...els.list.querySelectorAll(".conversation[data-conversation-id]")]
+      .map((element) => [element.dataset.conversationId, element])
+  );
+  for (const conversation of state.conversations) {
+    const button = buttons.get(conversation.id);
+    if (button) els.list.append(button);
+  }
+}
+
 function node(tag, cls, text) {
   const el = document.createElement(tag);
   if (cls) el.className = cls;
@@ -65,6 +212,7 @@ function avatarNode(conversation, className = "avatar") {
 }
 
 function renderConversations() {
+  state.conversations.sort(compareConversations);
   els.list.replaceChildren();
   els.count.textContent = `${state.conversations.length} 个会话`;
   if (!state.conversations.length) {
@@ -74,6 +222,7 @@ function renderConversations() {
   for (const item of state.conversations) {
     const button = node("button", `conversation${item.id === state.activeId ? " active" : ""}`);
     button.type = "button";
+    button.dataset.conversationId = item.id;
     const avatar = avatarNode(item);
     const main = node("span", "conversation-main");
     const title = node("span", "conversation-name");
@@ -81,11 +230,114 @@ function renderConversations() {
     const outboundState = ({ failed: "发送失败", uncertain: "发送结果待核实", sending: "正在发送", queued: "等待发送" })[item.last_outbound_status];
     const preview = node("span", "conversation-preview", outboundState || item.goods_name || receptionLabel(item));
     main.append(title, preview);
-    button.append(avatar, main);
-    if (item.unread_count) button.append(node("span", "badge", String(item.unread_count)));
-    else button.append(node("span"));
+    const meta = node("span", "conversation-meta");
+    const timer = responseTimerNode(item);
+    if (timer) meta.append(timer);
+    if (item.unread_count) meta.append(node("span", "badge", String(item.unread_count)));
+    button.append(avatar, main, meta);
     button.addEventListener("click", () => openConversation(item.id));
     els.list.append(button);
+  }
+  renderShopWorkspace();
+}
+
+function renderShopWorkspace() {
+  if (!els.shopWorkspace) return;
+  const waiting = state.conversations.filter((item) => item.response_deadline_at).length;
+  els.shopPendingCount.textContent = String(waiting);
+  els.shopPendingCount.classList.toggle("hidden", waiting === 0);
+  const labels = {
+    ready: "消息监听正常",
+    starting: "正在启动",
+    login_required: "等待登录",
+    degraded: "监听异常",
+    error: "连接失败",
+    stopped: "未连接",
+  };
+  els.shopStatus.textContent = labels[state.connector] || "状态未知";
+}
+
+async function loadShop() {
+  if (embedMode !== "shops") return;
+  try {
+    const shop = await api("/shop");
+    els.shopName.textContent = shop.name;
+    els.shopAvatar.textContent = (shop.name || "拼").slice(0, 1);
+  } catch (error) {
+    els.shopStatus.textContent = error.message;
+  }
+}
+
+function renderGreetingSettings(config) {
+  const current = config || DEFAULT_GREETING;
+  els.greetingEnabled.checked = Boolean(current.enabled);
+  els.greetingGroups.replaceChildren();
+  for (const [type, meta] of Object.entries(GREETING_META)) {
+    const field = node("div", "greeting-field");
+    const heading = node("div", "greeting-field-head");
+    heading.append(
+      node("strong", "", meta.label),
+      node("small", "", "每行一个触发语，最多 50 条")
+    );
+    const triggers = document.createElement("textarea");
+    triggers.className = "greeting-triggers";
+    triggers.dataset.type = type;
+    triggers.maxLength = 2100;
+    triggers.value = (current.trigger_groups?.[type] || []).join("\n");
+    const tags = node("div", "greeting-tags");
+    const label = node("label", "greeting-reply-line");
+    label.append(node("span", "", "回复话术（每行一个，最多 10 条；系统按顾客随机分配）"));
+    const reply = document.createElement("textarea");
+    reply.className = "greeting-reply";
+    reply.dataset.type = type;
+    reply.maxLength = 4000;
+    const rawReplies = current.reply_templates?.[type] || [];
+    reply.value = (Array.isArray(rawReplies) ? rawReplies : [rawReplies]).join("\n");
+    label.append(reply);
+    field.append(heading, triggers, tags, label);
+    els.greetingGroups.append(field);
+    const renderTags = () => {
+      tags.replaceChildren(
+        ...triggers.value
+          .split(/\r?\n/)
+          .map((item) => item.trim())
+          .filter(Boolean)
+          .slice(0, 50)
+          .map((item) => node("span", "greeting-tag", item))
+      );
+    };
+    triggers.addEventListener("input", renderTags);
+    renderTags();
+  }
+  els.greetingUpdatedAt.textContent = current.updated_at
+    ? `已更新 ${fmtTime(current.updated_at)}`
+    : "默认配置";
+}
+
+function readGreetingSettings() {
+  const trigger_groups = {};
+  const reply_templates = {};
+  for (const type of Object.keys(GREETING_META)) {
+    const triggerNode = els.greetingGroups.querySelector(`.greeting-triggers[data-type="${type}"]`);
+    const replyNode = els.greetingGroups.querySelector(`.greeting-reply[data-type="${type}"]`);
+    trigger_groups[type] = (triggerNode?.value || "")
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    reply_templates[type] = (replyNode?.value || "")
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  return { enabled: els.greetingEnabled.checked, trigger_groups, reply_templates };
+}
+
+async function loadGreetingSettings() {
+  try {
+    renderGreetingSettings(await api("/automation/greeting"));
+  } catch (error) {
+    renderGreetingSettings(DEFAULT_GREETING);
+    toast(error.message, true);
   }
 }
 
@@ -165,14 +417,25 @@ function renderMessage(message) {
 
 function renderDetail(data) {
   const c = data.conversation;
+  const current = state.conversations.find((item) => item.id === c.id);
+  if (current) Object.assign(current, c);
   els.header.className = "chat-head";
   els.header.replaceChildren();
   const info = node("div", "chat-identity");
+  const back = node("button", "embed-back", "‹");
+  back.type = "button";
+  back.setAttribute("aria-label", "返回会话列表");
+  back.addEventListener("click", closeEmbeddedConversation);
+  info.append(back);
   info.append(avatarNode(c, "header-avatar"));
   const identityText = node("div");
   identityText.append(node("h2", "", c.display_name), node("p", "", c.goods_name || "暂未关联商品卡片"));
   info.append(identityText);
-  els.header.append(info, node("span", "state", receptionLabel(c)));
+  const status = node("div", "chat-head-status");
+  const timer = responseTimerNode(c, "header");
+  if (timer) status.append(timer);
+  status.append(node("span", "state", receptionLabel(c)));
+  els.header.append(info, status);
   els.messages.replaceChildren(...data.messages.map(renderMessage));
   els.messages.scrollTop = els.messages.scrollHeight;
   els.form.classList.remove("hidden");
@@ -192,6 +455,23 @@ function renderDetail(data) {
   renderDecision(data.decision);
 }
 
+function closeEmbeddedConversation() {
+  state.activeId = null;
+  state.detailRequest += 1;
+  els.header.className = "chat-head muted";
+  const copy = node("div");
+  copy.append(
+    node("h2", "", "请选择一个会话"),
+    node("p", "", "从会话列表进入中台辅助对话框")
+  );
+  els.header.replaceChildren(copy);
+  els.messages.replaceChildren(
+    node("div", "empty compact", "选择会话后查看聊天记录")
+  );
+  els.form.classList.add("hidden");
+  renderConversations();
+}
+
 function renderDecision(decision) {
   els.decision.replaceChildren();
   els.useSuggestion.classList.add("hidden");
@@ -202,7 +482,9 @@ function renderDecision(decision) {
     return;
   }
   els.decision.className = "";
-  els.decisionRoute.textContent = decision.action === "auto_send" ? "自动发送" : "人工建议";
+  els.decisionRoute.textContent = decision.route === "greeting"
+    ? (decision.action === "auto_send" ? "问候 · 自动发送" : "问候 · 人工建议")
+    : (decision.action === "auto_send" ? "自动发送" : "人工建议");
   if (decision.suggested_answer) {
     els.decision.append(node("div", "decision-answer", decision.suggested_answer));
     els.useSuggestion.classList.remove("hidden");
@@ -212,8 +494,21 @@ function renderDecision(decision) {
       els.input.focus();
     };
   }
-  if (decision.risk_reason) els.decision.append(node("div", "decision-reason", `转人工原因：${decision.risk_reason}`));
-  const metrics = [decision.qa_code && `QA ${decision.qa_code}`, decision.top_score != null && `分数 ${decision.top_score.toFixed(3)}`, decision.score_margin != null && `差值 ${decision.score_margin.toFixed(3)}`].filter(Boolean).join(" · ");
+  if (decision.risk_reason) {
+    const reasonLabel = decision.route === "greeting" ? "识别与发送说明" : "转人工原因";
+    els.decision.append(node("div", "decision-reason", `${reasonLabel}：${decision.risk_reason}`));
+  }
+  const greetingLabel = GREETING_META[decision.greeting_type]?.label;
+  const recognitionLabel = decision.recognition_source === "rule"
+    ? "规则识别"
+    : (decision.recognition_source === "llm" ? "模型兜底" : "");
+  const metrics = [
+    decision.qa_code && `QA ${decision.qa_code}`,
+    greetingLabel && `类型 ${greetingLabel}`,
+    recognitionLabel,
+    decision.top_score != null && `分数 ${decision.top_score.toFixed(3)}`,
+    decision.score_margin != null && `差值 ${decision.score_margin.toFixed(3)}`
+  ].filter(Boolean).join(" · ");
   if (metrics) els.decision.append(node("div", "decision-metrics", metrics));
 }
 
@@ -246,6 +541,7 @@ function renderConnector(data) {
   syncConversationPermission(active);
   syncGlobalPermission();
   renderConversations();
+  renderShopWorkspace();
 }
 
 async function loadStatus() {
@@ -293,6 +589,27 @@ els.convAuto.addEventListener("change", async () => {
     toast(enabled ? "该会话已恢复自动接待" : "该会话已由人工接待");
     await loadConversations(); await openConversation(state.activeId);
   } catch (error) { els.convAuto.checked = !enabled; toast(error.message, true); }
+});
+
+els.greetingForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const payload = readGreetingSettings();
+  els.greetingSave.disabled = true;
+  try {
+    const result = await api("/automation/greeting", { method: "PUT", body: JSON.stringify(payload) });
+    renderGreetingSettings(result);
+    toast("问候话术已保存，下一条消息立即生效");
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    els.greetingSave.disabled = false;
+  }
+});
+
+els.greetingReset.addEventListener("click", () => {
+  if (!window.confirm("恢复默认问候配置会覆盖当前触发语和回复话术，继续吗？")) return;
+  renderGreetingSettings(DEFAULT_GREETING);
+  toast("已填入默认配置，请点击保存后生效");
 });
 
 els.form.addEventListener("submit", async (event) => {
@@ -345,4 +662,9 @@ setInterval(async () => {
   if (state.activeId) await openConversation(state.activeId);
 }, 3000);
 
-await Promise.all([loadConversations(), loadStatus()]);
+setInterval(updateResponseTimers, 1000);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) updateResponseTimers();
+});
+
+await Promise.all([loadConversations(), loadStatus(), loadShop(), loadGreetingSettings()]);

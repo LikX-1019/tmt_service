@@ -11,6 +11,7 @@ from app.models.conversation import (
     OutboundJob,
     ReplyDecision,
     Shop,
+    ShopGreetingConfig,
 )
 from app.models.knowledge import QAKnowledge
 
@@ -26,4 +27,5 @@ __all__ = [
     "ReplyDecision",
     "QAKnowledge",
     "Shop",
+    "ShopGreetingConfig",
 ]

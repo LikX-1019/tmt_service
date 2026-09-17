@@ -19,6 +19,7 @@ async def _answer(service: QAService, request: QARequest) -> QAResult:
         key: value
         for key, value in {
             "product_code": request.product_code,
+            "product_name": request.product_name,
             "service_stage": request.service_stage,
             "knowledge_version": request.knowledge_version,
         }.items()

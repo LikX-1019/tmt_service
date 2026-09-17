@@ -76,3 +76,47 @@ def test_same_priority_exact_matches_are_ambiguous() -> None:
     resolved = matcher.resolve("材质是什么", product_code="A")
     assert resolved.item is None
     assert resolved.ambiguous is True
+
+
+def test_product_code_matches_without_service_stage() -> None:
+    matcher = FAQMatcher([
+        contextual_item("A-PRE", "A", "pre_sale", "A 售前"),
+        contextual_item("B-PRE", "B", "pre_sale", "B 售前"),
+    ])
+
+    resolved = matcher.resolve("材质是什么", product_code="A")
+    assert resolved.item is not None
+    assert resolved.item.id == "A-PRE"
+
+
+def test_product_name_matches_when_platform_id_differs() -> None:
+    item = FAQItem(
+        id="BG07-MAT",
+        question="材质是什么",
+        answer="航空级铝合金。",
+        metadata={"product_id": "BG07", "product_name": "护腕支架pro", "service_stage": "pre_sale"},
+    )
+    matcher = FAQMatcher([item, contextual_item("OTHER", "OTHER", "pre_sale", "其他")])
+
+    resolved = matcher.resolve(
+        "材质是什么",
+        product_code="123456789",
+        product_name="护腕支架pro 加长版",
+    )
+    assert resolved.item is not None
+    assert resolved.item.id == "BG07-MAT"
+
+
+def test_product_name_ambiguity_is_not_resolved() -> None:
+    def named(item_id: str, name: str) -> FAQItem:
+        return FAQItem(
+            id=item_id,
+            question="材质是什么",
+            answer=f"{item_id} 回答",
+            metadata={"product_id": item_id, "product_name": name, "service_stage": "pre_sale"},
+        )
+
+    matcher = FAQMatcher([named("A", "护腕支架"), named("B", "护腕支架pro")])
+    resolved = matcher.resolve("材质是什么", product_name="护腕支架")
+    assert resolved.item is None
+    assert resolved.ambiguous is True

@@ -76,15 +76,38 @@ async def test_uncertain_send_is_not_retried_and_pauses_global_automation(runtim
             "is_backfill": False,
         },
     )
-    job = await runtime.reply(
-        conversation["id"], content="您好，请问有什么可以帮您？", client_request_id="manual:test-1"
+    other_conversation, _, _ = await repository.ingest_message(
+        shop["id"],
+        {
+            "platform_conversation_id": "buyer-2",
+            "display_name": "另一位顾客",
+            "direction": "inbound",
+            "kind": "text",
+            "content": "在吗",
+            "occurred_at": datetime.now(timezone.utc),
+            "platform_message_id": "m2",
+            "fingerprint": "c" * 64,
+            "is_backfill": False,
+        },
     )
+    job, created = await repository.create_outbound_job(
+        conversation["id"],
+        content="您好，请问有什么可以帮您？",
+        client_request_id="auto:test-1",
+        source="auto",
+    )
+    assert created is True
+    runtime._send_queue.put_nowait(str(job["id"]))
     await runtime._send_queue.join()
     stored = await repository.get_job(job["id"])
     current_shop = await repository.get_shop(shop["id"])
+    failed_conversation = await repository.get_conversation(conversation["id"])
+    unaffected_conversation = await repository.get_conversation(other_conversation["id"])
     assert connector.calls == 1
     assert stored and stored["status"] == "uncertain"
-    assert current_shop and current_shop["global_auto_reply_enabled"] is False
+    assert current_shop and current_shop["global_auto_reply_enabled"] is True
+    assert failed_conversation and failed_conversation["auto_reply_enabled"] is False
+    assert unaffected_conversation and unaffected_conversation["auto_reply_enabled"] is True
 
 
 @pytest.mark.asyncio
@@ -94,6 +117,16 @@ async def test_automatic_reception_requires_ready_connector(runtime_parts) -> No
     with pytest.raises(ConsoleUnavailableError, match="连接器就绪"):
         await runtime.set_automation(True)
     assert (await runtime.automation())["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_shop_summary_exposes_current_shop(runtime_parts) -> None:
+    runtime, _, _ = runtime_parts
+    summary = await runtime.shop_summary()
+
+    assert summary["id"]
+    assert summary["platform"] == "pdd"
+    assert summary["name"]
 
 
 @pytest.mark.asyncio
@@ -129,6 +162,24 @@ def test_event_audit_removes_message_and_reply_body() -> None:
     payload = {"id": "m1", "conversation_id": "c1", "content": "顾客隐私正文", "kind": "text"}
     sanitized = ConsoleRuntime._sanitize_event_payload("message.created", payload)
     assert sanitized == {"id": "m1", "conversation_id": "c1", "kind": "text"}
+
+
+def test_conversation_event_includes_response_timer_fields() -> None:
+    payload = {
+        "id": "c1",
+        "state": "pending",
+        "unread_count": 1,
+        "response_started_at": "2026-09-17T00:00:00Z",
+        "response_deadline_at": "2026-09-17T00:02:40Z",
+        "display_name": "不应进入事件审计",
+    }
+    assert ConsoleRuntime._sanitize_event_payload("conversation.upserted", payload) == {
+        "id": "c1",
+        "state": "pending",
+        "unread_count": 1,
+        "response_started_at": "2026-09-17T00:00:00Z",
+        "response_deadline_at": "2026-09-17T00:02:40Z",
+    }
 
 
 @pytest.mark.asyncio

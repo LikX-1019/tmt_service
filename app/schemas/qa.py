@@ -14,6 +14,7 @@ NonBlankQuery = Annotated[
 class QARequest(BaseModel):
     query: NonBlankQuery
     product_code: str | None = Field(default=None, max_length=64)
+    product_name: str | None = Field(default=None, max_length=500)
     service_stage: Literal["pre_sale", "post_sale", "general"] | None = None
     knowledge_version: str | None = Field(default=None, max_length=100)
 

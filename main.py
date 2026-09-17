@@ -2,6 +2,7 @@
 
 import logging
 
+import uvicorn
 from fastapi import FastAPI
 
 from app.api.router import api_router
@@ -43,3 +44,18 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+
+def main() -> None:
+    """直接运行本文件时启动 Web 服务。"""
+    settings = get_settings()
+    uvicorn.run(
+        app,
+        host=settings.app_host,
+        port=settings.app_port,
+        log_level=settings.log_level.lower(),
+    )
+
+
+if __name__ == "__main__":
+    main()

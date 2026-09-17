@@ -44,6 +44,7 @@ class QAService:
         product_code: str | None = None,
         service_stage: str | None = None,
         knowledge_version: str | None = None,
+        product_name: str | None = None,
     ) -> QAResult:
         started_at = perf_counter()
         normalized_query = self._normalizer.normalize(query)
@@ -52,6 +53,7 @@ class QAService:
             product_code=product_code,
             service_stage=service_stage,
             knowledge_version=knowledge_version,
+            product_name=product_name,
         )
         faq = faq_match.item
         if faq is not None:
@@ -110,7 +112,22 @@ class QAService:
             )
             return result
 
-        answer = await self._answer_generator.generate(query.strip(), reranked)
+        generation_fallback = False
+        try:
+            answer = await self._answer_generator.generate(query.strip(), reranked)
+        except Exception:
+            standard_answer = str(reranked[0].metadata.get("answer") or "").strip()
+            if not standard_answer:
+                raise
+            generation_fallback = True
+            answer = standard_answer
+            logger.exception(
+                "qa_answer_generation_failed_using_standard_answer",
+                extra={
+                    "event": "qa_answer_generation_failed_using_standard_answer",
+                    "qa_code": reranked[0].chunk_id,
+                },
+            )
         sources = [
             QASource(
                 chunk_id=document.chunk_id,
@@ -125,7 +142,10 @@ class QAService:
             route="rag",
             sources=sources,
             match_score=faq_match.match_score,
-            decision_factors={"faq_match_reason": faq_match.reason},
+            decision_factors={
+                "faq_match_reason": faq_match.reason,
+                "generation_fallback": generation_fallback,
+            },
             trace_documents=reranked,
             retrieval_counts=retrieval_counts,
         )

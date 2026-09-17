@@ -1,5 +1,10 @@
 name: customer-service-agent
 
+# macOS 镜像存储：在 Docker Desktop > Settings > Resources > Advanced 中
+# 将 Disk image location 设置为 /Users/li001/Desktop/tmt/develop/docker-01。
+# 此项是 Docker Desktop 全局设置，不能通过 Compose 的 image 字段指定。
+# 持久化数据：以下 ./data/docker 路径相对于本文件所在目录，保存在项目中。
+# 本机配置及验证方法见 docs/Docker本机存储配置.md。
 services:
   mysql:
     image: mysql:8.0.43
@@ -53,7 +58,7 @@ services:
       - customer-service-network
 
   minio:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
     container_name: ${COMPOSE_PROJECT_NAME:-customer-service}-minio
     restart: unless-stopped
     environment:

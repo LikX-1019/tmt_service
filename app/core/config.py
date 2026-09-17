@@ -2,7 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote_plus
 
 from pydantic import AliasChoices, Field, SecretStr, field_validator
@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     pdd_chrome_executable: Path | None = None
     pdd_chrome_profile_dir: Path = PROJECT_ROOT / "data" / "runtime" / "pdd-chrome"
     pdd_poll_interval_seconds: float = Field(default=1.0, ge=0.5, le=10)
+    pdd_response_timeout_seconds: int = Field(default=160, ge=1)
     message_asset_dir: Path = PROJECT_ROOT / "data" / "message-assets"
     message_asset_max_bytes: int = Field(default=8 * 1024 * 1024, ge=1024, le=50 * 1024 * 1024)
 
@@ -63,6 +64,10 @@ class Settings(BaseSettings):
     )
     auto_reply_min_precision: float = Field(default=0.98, ge=0.5, le=1)
     auto_reply_min_samples: int = Field(default=100, ge=1)
+    auto_reply_rag_mode: Literal["suggest_only", "calibrated", "immediate"] = (
+        "calibrated"
+    )
+    auto_reply_rag_min_margin: float = Field(default=0.10, ge=0)
     message_retention_days: int = Field(default=30, ge=1)
     audit_retention_days: int = Field(default=90, ge=1)
 

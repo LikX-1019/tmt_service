@@ -26,6 +26,22 @@ class FakeRuntime:
         self.broker = EventBroker()
         self.repository = FakeRepository()
         self.enabled = False
+        self.greeting = {
+            "enabled": True,
+            "trigger_groups": {
+                "salutation": ["你好"],
+                "availability": ["在吗"],
+                "thanks": ["谢谢"],
+                "goodbye": ["再见"],
+            },
+            "reply_templates": {
+                "salutation": "您好",
+                "availability": "我在",
+                "thanks": "不客气",
+                "goodbye": "再见",
+            },
+            "updated_at": None,
+        }
 
     async def ensure_initialized(self):
         return None
@@ -61,6 +77,20 @@ class FakeRuntime:
         self.enabled = enabled
         return {"enabled": enabled}
 
+    async def greeting_automation(self):
+        return self.greeting
+
+    async def set_greeting_automation(
+        self, *, enabled, trigger_groups, reply_templates
+    ):
+        self.greeting = {
+            "enabled": enabled,
+            "trigger_groups": trigger_groups,
+            "reply_templates": reply_templates,
+            "updated_at": NOW,
+        }
+        return self.greeting
+
 
 @pytest.fixture
 def fake_runtime():
@@ -88,6 +118,45 @@ async def test_global_automation_switch(fake_runtime) -> None:
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.put("/api/v1/automation", json={"enabled": True})
     assert response.json() == {"code": 0, "message": "success", "data": {"enabled": True}}
+
+
+@pytest.mark.asyncio
+async def test_greeting_automation_config_validation_and_update(fake_runtime) -> None:
+    payload = {
+        "enabled": True,
+        "trigger_groups": {
+            "salutation": [" 你好 ", "你好", ""],
+            "availability": ["在吗"],
+            "thanks": ["谢谢"],
+            "goodbye": ["再见"],
+        },
+        "reply_templates": {
+            "salutation": " 您好，亲，请问有什么可以帮您？ ",
+            "availability": "我在的",
+            "thanks": "不客气",
+            "goodbye": "祝您愉快",
+        },
+    }
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        created = await client.put("/api/v1/automation/greeting", json=payload)
+        duplicate = await client.put(
+            "/api/v1/automation/greeting",
+            json={
+                **payload,
+                "trigger_groups": {
+                    **payload["trigger_groups"],
+                    "availability": ["你好", "在吗"],
+                },
+            },
+        )
+        current = await client.get("/api/v1/automation/greeting")
+
+    data = created.json()["data"]
+    assert data["enabled"] is True
+    assert data["trigger_groups"]["salutation"] == ["你好"]
+    assert data["reply_templates"]["salutation"] == ["您好，亲，请问有什么可以帮您？"]
+    assert duplicate.status_code == 422
+    assert current.json()["data"] == data
 
 
 @pytest.mark.asyncio

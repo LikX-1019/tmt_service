@@ -33,12 +33,22 @@ class ReadyConnector(CustomerServiceConnector):
 class GreetingAgent:
     def __init__(self) -> None:
         self.customer: CustomerContext | None = None
+        self.greeting_config: dict | None = None
 
-    async def run(self, message: str, customer: CustomerContext) -> AgentReply:
+    async def run(
+        self,
+        message: str,
+        customer: CustomerContext,
+        *,
+        greeting_config: dict | None = None,
+    ) -> AgentReply:
         self.customer = customer
+        self.greeting_config = greeting_config
         return AgentReply(
             intent="daily_greeting",
+            greeting_type="salutation",
             confidence=0.98,
+            recognition_source="rule",
             answer="林女士您好，我是小满，请问有什么可以帮您？",
         )
 
@@ -94,11 +104,15 @@ async def test_greeting_routes_to_agent_before_qa() -> None:
         assert decision is not None
         assert decision["route"] == "greeting"
         assert decision["action"] == "suggest"
+        assert decision["greeting_type"] == "salutation"
+        assert decision["recognition_source"] == "rule"
         assert decision["suggested_answer"] == "林女士您好，我是小满，请问有什么可以帮您？"
         assert agent.customer is not None
         assert agent.customer.display_name == "林女士"
         assert agent.customer.shop_name == "JAFFICK旗舰店"
         assert agent.customer.goods_name == "轻薄羽绒服"
+        assert agent.greeting_config is not None
+        assert agent.greeting_config["enabled"] is True
     finally:
         await runtime.close()
         await engine.dispose()
