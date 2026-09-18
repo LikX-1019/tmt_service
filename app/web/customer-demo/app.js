@@ -56,6 +56,7 @@ const state = {
   transportMode: "chat",
   transport: null,
   boundProductId: null,
+  explicitProductId: "",
   debug: {},
   sessions: new Map(),
 };
@@ -379,8 +380,7 @@ function currentProductId() {
 }
 
 function updateContextView() {
-  const explicitProductId = currentProductId();
-  const productId = state.boundProductId || explicitProductId;
+  const productId = state.explicitProductId || state.boundProductId;
   const serviceStage = currentServiceStage();
   dom.currentProductChip.textContent = productId || "未指定商品";
   dom.currentStageChip.textContent = SERVICE_STAGE_LABELS[serviceStage] ?? serviceStage;
@@ -397,7 +397,7 @@ function persistCurrentSession() {
     sessionId: state.sessionId,
     customerId: state.customerId,
     messages: state.messages,
-    explicitProductId: currentProductId(),
+    explicitProductId: state.explicitProductId,
     boundProductId: state.boundProductId,
     legacyProductCode: dom.legacyProductCode.value.trim(),
     serviceStage: currentServiceStage(),
@@ -428,7 +428,7 @@ function renderSessionHistory() {
     customer.className = "session-customer";
     customer.textContent = session.customerId;
     const meta = document.createElement("em");
-    const product = session.boundProductId || session.explicitProductId || "未指定商品";
+    const product = session.explicitProductId || session.boundProductId || "未指定商品";
     const stage = SERVICE_STAGE_LABELS[session.serviceStage] ?? session.serviceStage ?? "通用";
     meta.textContent = `${product} · ${stage} · ${session.messages.length} 条消息`;
     item.append(title, customer, meta);
@@ -447,8 +447,9 @@ function selectSession(sessionId) {
   state.customerId = session.customerId;
   state.messages = session.messages;
   state.boundProductId = session.boundProductId ?? null;
+  state.explicitProductId = session.explicitProductId ?? "";
   state.debug = { ...session.debug };
-  dom.productId.value = session.explicitProductId ?? "";
+  dom.productId.value = state.explicitProductId || state.boundProductId || "";
   dom.legacyProductCode.value = session.legacyProductCode ?? "";
   dom.stageInputs.forEach((input) => {
     input.checked = input.value === (session.serviceStage ?? "general");
@@ -467,7 +468,7 @@ function defaultDebug() {
     customer_id: state.customerId || null,
     input_message_id: null,
     output_message_id: null,
-    current_product_id: state.boundProductId || currentProductId() || null,
+    current_product_id: state.explicitProductId || state.boundProductId || null,
     service_stage: currentServiceStage(),
     transport_mode: state.transport?.mode ?? state.transportMode,
     source: null,
@@ -682,11 +683,15 @@ function resetSession() {
   state.customerId = `demo_customer_${uuid()}`;
   state.messages = [];
   state.boundProductId = null;
+  state.explicitProductId = "";
   state.debug = {};
+  dom.productId.value = "";
+  dom.legacyProductCode.value = "";
   const welcome = createMessage("assistant", WELCOME_MESSAGE, "sent");
   state.messages.push(welcome);
   dom.sessionId.textContent = state.sessionId;
   dom.customerId.textContent = state.customerId;
+  updateContextView();
   updateDebug({
     output_message_id: welcome.id,
   });
@@ -716,7 +721,7 @@ async function dispatchCustomerMessage(message, productIdOverride = null) {
   message.status = "sending";
   message.session_id = state.sessionId;
   message.customer_id = state.customerId;
-  message.product_id = productIdOverride || currentProductId();
+  message.product_id = productIdOverride || state.explicitProductId;
   message.service_stage = currentServiceStage();
   message.legacy_product_code = dom.legacyProductCode.value.trim();
   renderMessages();
@@ -724,7 +729,7 @@ async function dispatchCustomerMessage(message, productIdOverride = null) {
   updateDebug({
     input_message_id: message.id,
     output_message_id: null,
-    current_product_id: state.boundProductId || message.product_id || null,
+    current_product_id: message.product_id || state.boundProductId || null,
     service_stage: message.service_stage,
     source: null,
     route: null,
@@ -742,6 +747,9 @@ async function dispatchCustomerMessage(message, productIdOverride = null) {
     message.status = "sent";
     if (result.product?.id) {
       state.boundProductId = result.product.id;
+      state.explicitProductId = "";
+      dom.productId.value = result.product.id;
+      updateContextView();
     }
     const assistantMessage = createMessage("assistant", result.answer, "sent");
     assistantMessage.products = result.products;
@@ -749,7 +757,7 @@ async function dispatchCustomerMessage(message, productIdOverride = null) {
     state.messages.push(assistantMessage);
     updateDebug({
       output_message_id: assistantMessage.id,
-      current_product_id: state.boundProductId || message.product_id || null,
+      current_product_id: message.product_id || state.boundProductId || null,
       source: result.source,
       route: result.route,
       product_resolution: result.productResolution,
@@ -831,7 +839,10 @@ function bindEvents() {
   dom.resetSessionButton.addEventListener("click", resetSession);
 
   dom.productForm.addEventListener("submit", (event) => event.preventDefault());
-  dom.productId.addEventListener("input", updateContextView);
+  dom.productId.addEventListener("input", () => {
+    state.explicitProductId = currentProductId();
+    updateContextView();
+  });
   dom.legacyProductCode.addEventListener("input", updateContextView);
   dom.stageInputs.forEach((input) => input.addEventListener("change", updateContextView));
 

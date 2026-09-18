@@ -79,6 +79,23 @@ async def test_customer_demo_js_supports_selectable_session_history() -> None:
 
 
 @pytest.mark.asyncio
+async def test_customer_demo_keeps_product_context_isolated_per_session() -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/assets/customer-demo/app.js")
+
+    assert response.status_code == 200
+    assert 'explicitProductId: ""' in response.text
+    assert 'state.explicitProductId = session.explicitProductId ?? ""' in response.text
+    assert 'dom.productId.value = state.explicitProductId || state.boundProductId || ""' in response.text
+    assert 'message.product_id = productIdOverride || state.explicitProductId' in response.text
+    assert 'state.explicitProductId = ""' in response.text
+    assert 'dom.productId.value = result.product.id' in response.text
+
+
+@pytest.mark.asyncio
 async def test_customer_demo_transport_uses_qa_compatibility_and_safe_rendering() -> None:
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
