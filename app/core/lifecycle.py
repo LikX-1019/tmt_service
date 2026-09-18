@@ -12,9 +12,8 @@ from fastapi import FastAPI
 from app.core.config import get_settings
 from app.database.session import dispose_engine, get_session_factory
 from app.factories.llm_factory import LLMFactory
-from app.integrations.pdd.playwright_connector import PddPlaywrightConnector
 from app.repositories.console_repository import ConsoleRepository
-from app.services.console_runtime import ConsoleRuntime
+from app.services.shop_runtime_manager import ShopRuntimeManager
 
 
 logger = logging.getLogger(__name__)
@@ -43,13 +42,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         return await get_qa_service()
 
-    runtime = ConsoleRuntime(
+    manager = ShopRuntimeManager(
         ConsoleRepository(get_session_factory()),
-        PddPlaywrightConnector(settings),
         qa_provider,
         settings,
     )
-    app.state.console_runtime = runtime
+    app.state.shop_runtime_manager = manager
+    await manager.initialize()
     if settings.llm_warmup_on_startup:
         warmup_thread = Thread(
             target=_warm_up_llm,
@@ -61,5 +60,5 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        await runtime.close()
+        await manager.close()
         await dispose_engine()

@@ -6,6 +6,7 @@ from app.integrations.pdd.base import (
     ConnectorStatus,
     ConnectorStatusSnapshot,
     CustomerServiceConnector,
+    ShopIdentity,
     SendReceipt,
     SendUncertainError,
 )
@@ -17,6 +18,7 @@ __all__ = [
     "ConnectorStatus",
     "ConnectorStatusSnapshot",
     "CustomerServiceConnector",
+    "ShopIdentity",
     "PddPlaywrightConnector",
     "SendReceipt",
     "SendUncertainError",

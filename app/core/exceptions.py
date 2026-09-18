@@ -59,3 +59,27 @@ class ResourceNotFoundError(AppException):
     code = "RESOURCE_NOT_FOUND"
     default_message = "请求的资源不存在"
     status_code = 404
+
+
+class ShopContextRequiredError(AppException):
+    """多店状态下旧接口无法安全推断店铺。"""
+
+    code = "SHOP_CONTEXT_REQUIRED"
+    default_message = "存在多个店铺，请明确选择店铺"
+    status_code = 409
+
+
+class ShopLimitExceededError(AppException):
+    """同时在线店铺已达到本机配置上限。"""
+
+    code = "SHOP_LIMIT_EXCEEDED"
+    default_message = "同时在线店铺数量已达到上限"
+    status_code = 409
+
+
+class DuplicateShopAccountError(AppException):
+    """新窗口登录了已经接入的平台账号。"""
+
+    code = "DUPLICATE_SHOP_ACCOUNT"
+    default_message = "该拼多多店铺已经接入"
+    status_code = 409

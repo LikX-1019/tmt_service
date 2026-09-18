@@ -22,12 +22,12 @@ from app.integrations.pdd.base import (
     ProfileCallback,
     SendReceipt,
     SendUncertainError,
+    ShopIdentity,
     StatusCallback,
     normalize_platform_customer_id,
 )
 from app.services.message_asset_storage import MessageAssetStorage, UnsupportedAssetError
 from app.integrations.pdd.parser import parse_browser_message
-from app.integrations.pdd.workbench import build_workbench_init_script
 from app.integrations.pdd.selectors import (
     CONVERSATION_ITEM_SELECTORS,
     COUNT_OUTBOUND_TEXT_SCRIPT,
@@ -41,6 +41,7 @@ from app.integrations.pdd.selectors import (
     SCAN_CURRENT_MESSAGES_SCRIPT,
     SCROLL_MESSAGE_HISTORY_SCRIPT,
     SEND_BUTTON_SELECTORS,
+    SHOP_IDENTITY_SCRIPT,
 )
 
 
@@ -76,8 +77,19 @@ def _message_backfill_flags(
 class PddPlaywrightConnector(CustomerServiceConnector):
     """只通过可见 DOM 收取和发送消息，不调用平台未公开接口。"""
 
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        *,
+        profile_dir: Path | None = None,
+        window_slot: int = 0,
+        require_identity: bool = False,
+    ) -> None:
         self._settings = settings or get_settings()
+        self._profile_dir = Path(profile_dir or self._settings.pdd_chrome_profile_dir)
+        self._window_slot = max(0, window_slot)
+        self._require_identity = require_identity
+        self._identity: ShopIdentity | None = None
         self._snapshot = ConnectorStatusSnapshot(ConnectorStatus.STOPPED)
         self._playwright: Any = None
         self._context: Any = None
@@ -95,6 +107,7 @@ class PddPlaywrightConnector(CustomerServiceConnector):
         self._platform_to_conversation: dict[str, str] = {}
         self._synced_conversations: set[str] = set()
         self._initial_scan_complete = False
+        self._identity = None
         self._backfill_until = 0.0
         self._stopping = False
         self._asset_storage = MessageAssetStorage(
@@ -108,38 +121,7 @@ class PddPlaywrightConnector(CustomerServiceConnector):
     async def diagnostics(self) -> dict[str, object]:
         """仅收集页面结构特征，严禁返回正文或 data 属性值。"""
         frames: list[dict[str, object]] = []
-        workbench: dict[str, object] = {
-            "mounted": False,
-            "resize_active": False,
-            "shield_active": False,
-            "left_panel_count": 0,
-            "right_panel_count": 0,
-        }
         if self._page and not self._page.is_closed():
-            try:
-                workbench_result = await self._page.evaluate(
-                    """
-                    () => {
-                      const host = document.getElementById('tmt-workbench-host');
-                      const root = host?.shadowRoot;
-                      const shield = root?.querySelector('.shield');
-                      return {
-                        mounted: Boolean(host && root),
-                        resize_active: host?.dataset.resizeActive === 'true',
-                        shield_active: Boolean(shield?.classList.contains('active')),
-                        left_panel_count: root?.querySelectorAll('.pane.left').length || 0,
-                        right_panel_count: root?.querySelectorAll('.pane.right').length || 0,
-                      };
-                    }
-                    """
-                )
-                if isinstance(workbench_result, dict):
-                    workbench.update(workbench_result)
-            except Exception:
-                logger.exception(
-                    "pdd_workbench_diagnostics_failed",
-                    extra={"event": "pdd_workbench_diagnostics_failed"},
-                )
             for index, frame in enumerate(self._page.frames):
                 try:
                     item = await frame.evaluate(DOM_DIAGNOSTICS_SCRIPT)
@@ -163,37 +145,24 @@ class PddPlaywrightConnector(CustomerServiceConnector):
                                 if isinstance(entry, dict)
                             ]
                     frames.append({"index": index, **item})
-        console_host = self._settings.app_host
-        if console_host in {"0.0.0.0", "::"}:
-            console_host = "127.0.0.1"
-        console_origin = f"http://{console_host}:{self._settings.app_port}"
-        console_reply_count = sum(
-            int(item.get("current_reply_matches") or 0)
-            for item in frames
-            if str(item.get("url") or "").startswith(console_origin)
-        )
         native_reply_count = sum(
             int(item.get("current_reply_matches") or 0)
             for item in frames
-            if not str(item.get("url") or "").startswith(console_origin)
-        )
-        workbench["console_reply_input_count"] = console_reply_count
-        workbench["native_reply_input_count"] = native_reply_count
-        workbench["console_input_operable"] = bool(
-            console_reply_count and not workbench["shield_active"]
-        )
-        workbench["native_input_operable"] = bool(
-            native_reply_count and not workbench["shield_active"]
         )
         return {
             "status": self._snapshot.status.value,
+            "browser_mode": "standalone",
             "frames": frames,
-            "workbench": workbench,
+            "native_reply_input_count": native_reply_count,
+            "native_input_operable": bool(native_reply_count),
             "activity_count": len(self._conversation_activity),
             "synced_conversation_count": len(self._synced_conversations),
             "seen_message_count": len(self._seen),
             "initial_scan_complete": self._initial_scan_complete,
             "startup_backfill_active": time.monotonic() < self._backfill_until,
+            "profile_dir": str(self._profile_dir),
+            "window_slot": self._window_slot,
+            "identity_confirmed": self._identity is not None,
             "send_selector_counts": {
                 selector: await self._page.locator(selector).count()
                 for selector in SEND_BUTTON_SELECTORS
@@ -240,7 +209,7 @@ class PddPlaywrightConnector(CustomerServiceConnector):
         try:
             from playwright.async_api import async_playwright
 
-            profile = Path(self._settings.pdd_chrome_profile_dir)
+            profile = self._profile_dir
             profile.mkdir(parents=True, exist_ok=True)
             self._playwright = await async_playwright().start()
             launch_kwargs: dict[str, Any] = {
@@ -248,7 +217,11 @@ class PddPlaywrightConnector(CustomerServiceConnector):
                 "headless": False,
                 # macOS 上 --start-maximized 不可靠，会话恢复可能得到极小窗口；
                 # 用显式位置和尺寸保证专用窗口始终铺满主屏工作区。
-                "args": ["--window-position=0,30", "--window-size=1920,969"],
+                "args": [
+                    f"--window-position={40 + (self._window_slot % 5) * 48},"
+                    f"{40 + (self._window_slot % 5) * 38}",
+                    "--window-size=1440,900",
+                ],
                 "no_viewport": True,
             }
             if self._settings.pdd_chrome_executable:
@@ -263,13 +236,6 @@ class PddPlaywrightConnector(CustomerServiceConnector):
             self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
             await self._page.expose_function("__codexPddWake", self._wake.set)
             await self._page.add_init_script(f"({MUTATION_OBSERVER_SCRIPT})()")
-            console_host = self._settings.app_host
-            if console_host in {"0.0.0.0", "::"}:
-                console_host = "127.0.0.1"
-            console_origin = f"http://{console_host}:{self._settings.app_port}"
-            await self._page.add_init_script(
-                build_workbench_init_script(console_origin)
-            )
             self._page.on("websocket", self._observe_websocket)
             self._page.on("crash", lambda: self._schedule_browser_error("页面已崩溃"))
             self._page.on("close", lambda: self._schedule_browser_error("页面已关闭"))
@@ -304,11 +270,37 @@ class PddPlaywrightConnector(CustomerServiceConnector):
             return True
         return await self._page.locator("text=/扫码登录|账号登录|请登录/").count() > 0
 
+    async def identity(self) -> ShopIdentity | None:
+        if self._identity is not None:
+            return self._identity
+        if not self._page or self._page.is_closed() or await self._is_login_required():
+            return None
+        raw = await self._page.evaluate(SHOP_IDENTITY_SCRIPT)
+        if not isinstance(raw, dict):
+            return None
+        platform_shop_id = str(raw.get("platform_shop_id") or "").strip()
+        name = str(raw.get("name") or "").strip()
+        if not platform_shop_id or not name:
+            return None
+        self._identity = ShopIdentity(platform_shop_id=platform_shop_id, name=name[:255])
+        return self._identity
+
+    async def focus(self) -> None:
+        if not self._page or self._page.is_closed():
+            raise ConnectorError("专用浏览器未启动")
+        await self._page.bring_to_front()
+
     async def _scan_once(self, *, initial: bool = False) -> None:
         if not self._page or self._page.is_closed():
             raise ConnectorError("专用浏览器已关闭")
         if await self._is_login_required():
+            self._identity = None
             await self._set_status(ConnectorStatus.LOGIN_REQUIRED, "请在专用 Chrome 中登录")
+            return
+        if self._require_identity and await self.identity() is None:
+            await self._set_status(
+                ConnectorStatus.DEGRADED, "店铺身份无法识别，收发消息已暂停"
+            )
             return
         conversations = await self._page.evaluate(SCAN_CONVERSATIONS_SCRIPT)
         if not isinstance(conversations, list):

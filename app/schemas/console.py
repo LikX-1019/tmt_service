@@ -36,6 +36,37 @@ class ShopSummaryView(BaseModel):
     name: str
 
 
+class ShopCountsView(BaseModel):
+    conversations: int = 0
+    pending: int = 0
+    due_soon: int = 0
+    overdue: int = 0
+    knowledge_gaps: int = 0
+
+
+class ShopView(ShopSummaryView):
+    platform_shop_id: str | None = None
+    lifecycle_status: Literal["provisioning", "active", "failed", "disabled"]
+    desired_online: bool
+    browser_profile_key: str
+    reception_mode: Literal["assist", "guarded_auto"]
+    identified_at: datetime | None = None
+    last_error_code: str | None = None
+    enabled: bool
+    global_auto_reply_enabled: bool
+    connector: "ConnectorStatusData | None" = None
+    counts: ShopCountsView = Field(default_factory=ShopCountsView)
+
+
+class ShopListData(BaseModel):
+    items: list[ShopView]
+
+
+class ShopUpdate(BaseModel):
+    enabled: bool | None = None
+    reception_mode: Literal["assist", "guarded_auto"] | None = None
+
+
 class MessageView(BaseModel):
     id: str
     direction: Literal["inbound", "outbound"]
@@ -70,6 +101,8 @@ class ReplyDecisionView(BaseModel):
     greeting_type: Literal["salutation", "availability", "thanks", "goodbye"] | None = None
     recognition_source: Literal["rule", "llm"] | None = None
     qa_code: str | None = None
+    product_id: str | None = None
+    product_name: str | None = None
     top_score: float | None = None
     score_margin: float | None = None
     risk_reason: str | None = None
@@ -82,9 +115,9 @@ class OutboundJobView(BaseModel):
     id: str
     conversation_id: str
     client_request_id: str
-    source: Literal["manual", "auto"]
+    source: Literal["manual", "auto", "handoff"]
     content: str
-    status: Literal["queued", "sending", "sent", "uncertain", "failed"]
+    status: Literal["queued", "sending", "sent", "uncertain", "failed", "cancelled"]
     error_code: str | None = None
     responder_account_id: str | None = None
     responder_display_name: str | None = None
@@ -219,7 +252,80 @@ class GreetingAutomationData(GreetingAutomationUpdate):
     updated_at: datetime | None = None
 
 
+class HandoffAutomationUpdate(BaseModel):
+    reply_template: str = Field(min_length=1, max_length=400)
+
+    @field_validator("reply_template")
+    @classmethod
+    def strip_template(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("转人工话术不能为空")
+        return value
+
+
+class HandoffAutomationData(HandoffAutomationUpdate):
+    updated_at: datetime | None = None
+
+
 class ConnectorStatusData(BaseModel):
     status: Literal["stopped", "starting", "login_required", "ready", "degraded", "error"]
     detail: str | None = None
     changed_at: datetime | None = None
+
+
+class CustomerNoteUpdate(BaseModel):
+    content: str = Field(default="", max_length=4000)
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    pinned: bool = False
+
+
+class CustomerNoteData(CustomerNoteUpdate):
+    customer_id: str
+    shop_id: str
+    updated_at: datetime
+
+
+class KnowledgeGapView(BaseModel):
+    id: str
+    shop_id: str
+    product_id: str | None = None
+    normalized_question: str
+    example_question: str
+    reason_code: str
+    occurrences: int
+    status: Literal["open", "draft", "resolved", "dismissed"]
+    candidate_answer: str | None = None
+    linked_qa_code: str | None = None
+    first_seen_at: datetime
+    last_seen_at: datetime
+
+
+class KnowledgeGapListData(BaseModel):
+    items: list[KnowledgeGapView]
+
+
+class KnowledgeGapUpdate(BaseModel):
+    status: Literal["open", "draft", "resolved", "dismissed"]
+    candidate_answer: str | None = Field(default=None, max_length=4000)
+    linked_qa_code: str | None = Field(default=None, max_length=100)
+
+
+class KnowledgeGapDraftRequest(BaseModel):
+    standard_answer: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("standard_answer")
+    @classmethod
+    def strip_standard_answer(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("标准答案不能为空")
+        return value
+
+
+class ShopStatsData(BaseModel):
+    consultation_conversations: int
+    ai_replies: int
+    handoff_rate: float
+    knowledge_gap_rate: float
+    sla_compliance_rate: float

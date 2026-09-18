@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     pdd_chat_url: str = "https://mms.pinduoduo.com/chat-merchant/index.html"
     pdd_chrome_executable: Path | None = None
     pdd_chrome_profile_dir: Path = PROJECT_ROOT / "data" / "runtime" / "pdd-chrome"
+    pdd_chrome_profile_root: Path = (
+        PROJECT_ROOT / "data" / "runtime" / "pdd-shops"
+    )
+    pdd_max_active_shops: int = Field(default=5, ge=1, le=20)
     pdd_poll_interval_seconds: float = Field(default=1.0, ge=0.5, le=10)
     pdd_response_timeout_seconds: int = Field(default=160, ge=1)
     message_asset_dir: Path = PROJECT_ROOT / "data" / "message-assets"
@@ -68,6 +72,10 @@ class Settings(BaseSettings):
         "calibrated"
     )
     auto_reply_rag_min_margin: float = Field(default=0.10, ge=0)
+    product_api_base_url: str | None = None
+    product_api_bearer_token: SecretStr | None = Field(default=None, exclude=True)
+    product_api_timeout_seconds: float = Field(default=8.0, gt=0, le=60)
+    product_auto_reply_min_confidence: float = Field(default=0.95, ge=0, le=1)
     message_retention_days: int = Field(default=30, ge=1)
     audit_retention_days: int = Field(default=90, ge=1)
 
@@ -162,6 +170,7 @@ class Settings(BaseSettings):
         "embedding_model_path",
         "reranker_model_path",
         "pdd_chrome_profile_dir",
+        "pdd_chrome_profile_root",
         "auto_reply_calibration_path",
         "message_asset_dir",
     )
@@ -278,10 +287,15 @@ class Settings(BaseSettings):
             "llm_warmup_on_startup": self.llm_warmup_on_startup,
             "pdd_chat_url": self.pdd_chat_url,
             "pdd_chrome_profile_dir": str(self.pdd_chrome_profile_dir),
+            "pdd_chrome_profile_root": str(self.pdd_chrome_profile_root),
+            "pdd_max_active_shops": self.pdd_max_active_shops,
             "pdd_poll_interval_seconds": self.pdd_poll_interval_seconds,
             "message_asset_dir": str(self.message_asset_dir),
             "message_asset_max_bytes": self.message_asset_max_bytes,
             "auto_reply_policy_version": self.auto_reply_policy_version,
+            "product_api_base_url": self.product_api_base_url,
+            "product_api_timeout_seconds": self.product_api_timeout_seconds,
+            "product_auto_reply_min_confidence": self.product_auto_reply_min_confidence,
             "message_retention_days": self.message_retention_days,
             "audit_retention_days": self.audit_retention_days,
         }

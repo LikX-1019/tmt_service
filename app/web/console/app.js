@@ -1,12 +1,8 @@
-const embedMode = new URLSearchParams(window.location.search).get("embed");
-if (["shops", "console"].includes(embedMode)) {
-  document.body.classList.add(`embed-${embedMode}`);
-}
-
 const state = {
   conversations: [], activeId: null, filter: "", search: "",
   connector: "stopped", globalAutomation: false, detailRequest: 0,
-  conversationSignature: ""
+  conversationSignature: "", contextMenuId: null, shops: [], shopId: null,
+  eventSource: null, requestController: new AbortController(), noteCustomerId: null
 };
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -16,11 +12,24 @@ const els = {
   connectorButton: $("connectorButton"), globalAuto: $("globalAutomation"), convAuto: $("conversationAutomation"),
   goods: $("goodsContext"), goodsTag: $("goodsTag"), decision: $("decisionContent"),
   decisionRoute: $("decisionRoute"), useSuggestion: $("useSuggestion"), toast: $("toast"),
-  shopWorkspace: $("shopWorkspace"), shopName: $("shopName"), shopStatus: $("shopStatus"),
-  shopPendingCount: $("shopPendingCount"), shopAvatar: $("shopAvatar"),
   greetingForm: $("greetingForm"), greetingEnabled: $("greetingEnabled"),
   greetingGroups: $("greetingGroups"), greetingUpdatedAt: $("greetingUpdatedAt"),
-  greetingReset: $("greetingReset"), greetingSave: $("greetingSave")
+    greetingReset: $("greetingReset"), greetingSave: $("greetingSave"),
+    handoffForm: $("handoffForm"), handoffReply: $("handoffReply"),
+    handoffUpdatedAt: $("handoffUpdatedAt"), handoffSave: $("handoffSave"),
+    contextMenu: $("conversationContextMenu"), contextMenuName: $("contextMenuName"),
+    contextMenuTime: $("contextMenuTime"), contextMenuStatus: $("contextMenuStatus"),
+    contextMenuManual: $("contextMenuManual"), contextMenuAuto: $("contextMenuAuto"),
+    contextMenuClearTimer: $("contextMenuClearTimer"),
+    overview: $("shopOverview"), workspace: $("shopWorkspace"),
+    workspaceActions: $("workspaceActions"), shopList: $("shopList"),
+    overviewMetrics: $("overviewMetrics"), addShop: $("addShopButton"),
+    overviewButton: $("overviewButton"), shopSwitcher: $("shopSwitcher"),
+    focusButton: $("focusButton"), receptionMode: $("receptionMode"),
+    brandContext: $("brandContext"), customerNoteForm: $("customerNoteForm"),
+    customerNote: $("customerNote"), customerTags: $("customerTags"),
+    customerNoteSave: $("customerNoteSave"), noteUpdatedAt: $("noteUpdatedAt"),
+    knowledgeGapList: $("knowledgeGapList"), gapCount: $("gapCount")
 };
 
 const GREETING_META = {
@@ -68,12 +77,21 @@ const DEFAULT_GREETING = {
     ]
   }
 };
-
-if (embedMode === "shops") els.shopWorkspace.classList.remove("hidden");
+const DEFAULT_HANDOFF = {
+  reply_template: "您好，您反馈的售后问题已为您转接人工客服处理，请您稍候。"
+};
 
 async function api(path, options = {}) {
-  const response = await fetch(`/api/v1${path}`, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) }, ...options
+  const scoped = options.scope !== false;
+  const requestOptions = { ...options };
+  delete requestOptions.scope;
+  const scopedPath = scoped && state.shopId && !path.startsWith("/shops")
+    ? `/shops/${encodeURIComponent(state.shopId)}${path}`
+    : path;
+  const response = await fetch(`/api/v1${scopedPath}`, {
+    headers: { "Content-Type": "application/json", ...(requestOptions.headers || {}) },
+    signal: requestOptions.signal || state.requestController.signal,
+    ...requestOptions
   });
   let body;
   try { body = await response.json(); } catch { throw new Error(`服务返回异常 (${response.status})`); }
@@ -97,6 +115,12 @@ function fmtTime(value) {
   return date.toDateString() === today.toDateString()
     ? date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })
     : date.toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
+}
+
+function currentTimeText() {
+  return new Intl.DateTimeFormat("zh-CN", {
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false
+  }).format(new Date());
 }
 
 function timestamp(value) {
@@ -236,35 +260,63 @@ function renderConversations() {
     if (item.unread_count) meta.append(node("span", "badge", String(item.unread_count)));
     button.append(avatar, main, meta);
     button.addEventListener("click", () => openConversation(item.id));
+    button.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      showConversationContextMenu(item, event.clientX, event.clientY);
+    });
     els.list.append(button);
   }
-  renderShopWorkspace();
 }
 
-function renderShopWorkspace() {
-  if (!els.shopWorkspace) return;
-  const waiting = state.conversations.filter((item) => item.response_deadline_at).length;
-  els.shopPendingCount.textContent = String(waiting);
-  els.shopPendingCount.classList.toggle("hidden", waiting === 0);
-  const labels = {
-    ready: "消息监听正常",
-    starting: "正在启动",
-    login_required: "等待登录",
-    degraded: "监听异常",
-    error: "连接失败",
-    stopped: "未连接",
-  };
-  els.shopStatus.textContent = labels[state.connector] || "状态未知";
+function hideConversationContextMenu() {
+  state.contextMenuId = null;
+  els.contextMenu.classList.add("hidden");
 }
 
-async function loadShop() {
-  if (embedMode !== "shops") return;
+function showConversationContextMenu(conversation, clientX, clientY) {
+  state.contextMenuId = conversation.id;
+  els.contextMenuName.textContent = conversation.display_name || "顾客";
+  els.contextMenuTime.textContent = `当前时间 ${currentTimeText()}`;
+  els.contextMenuStatus.textContent = `${statusLabel(conversation.state)} · ${receptionLabel(conversation)}`;
+  const canEnable = state.globalAutomation && state.connector === "ready";
+  els.contextMenuManual.disabled = !conversation.auto_reply_enabled;
+  els.contextMenuAuto.disabled = conversation.auto_reply_enabled || !canEnable;
+  els.contextMenuAuto.title = canEnable ? "" : "请先连接并开启全局自动接待";
+  els.contextMenuClearTimer.disabled = !conversation.response_deadline_at;
+  els.contextMenuClearTimer.title = conversation.response_deadline_at ? "" : "当前会话没有响应计时";
+  els.contextMenu.classList.remove("hidden");
+  const rect = els.contextMenu.getBoundingClientRect();
+  const left = Math.min(clientX, window.innerWidth - rect.width - 8);
+  const top = Math.min(clientY, window.innerHeight - rect.height - 8);
+  els.contextMenu.style.left = `${Math.max(8, left)}px`;
+  els.contextMenu.style.top = `${Math.max(8, top)}px`;
+}
+
+async function updateConversationReception(conversationId, enabled) {
   try {
-    const shop = await api("/shop");
-    els.shopName.textContent = shop.name;
-    els.shopAvatar.textContent = (shop.name || "拼").slice(0, 1);
+    await api(`/conversations/${conversationId}/automation`, {
+      method: "PUT", body: JSON.stringify({ enabled })
+    });
+    toast(enabled ? "该会话已恢复自动接待" : "该会话已转人工接待");
+    await loadConversations();
+    if (state.activeId === conversationId) await openConversation(conversationId);
   } catch (error) {
-    els.shopStatus.textContent = error.message;
+    toast(error.message, true);
+  } finally {
+    hideConversationContextMenu();
+  }
+}
+
+async function clearConversationResponseTimer(conversationId) {
+  try {
+    await api(`/conversations/${conversationId}/response-timer`, { method: "DELETE" });
+    toast("该会话的响应计时已清除");
+    await loadConversations();
+    if (state.activeId === conversationId) await openConversation(conversationId);
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    hideConversationContextMenu();
   }
 }
 
@@ -341,6 +393,23 @@ async function loadGreetingSettings() {
   }
 }
 
+function renderHandoffSettings(config) {
+  const current = config || DEFAULT_HANDOFF;
+  els.handoffReply.value = current.reply_template || DEFAULT_HANDOFF.reply_template;
+  els.handoffUpdatedAt.textContent = current.updated_at
+    ? `已更新 ${fmtTime(current.updated_at)}`
+    : "默认话术";
+}
+
+async function loadHandoffSettings() {
+  try {
+    renderHandoffSettings(await api("/automation/handoff"));
+  } catch (error) {
+    renderHandoffSettings(DEFAULT_HANDOFF);
+    toast(error.message, true);
+  }
+}
+
 function statusLabel(value) {
   return ({ pending: "等待处理", manual: "人工接管", auto_replied: "已自动回复" })[value] || "会话";
 }
@@ -403,7 +472,7 @@ function renderMessage(message) {
     if (!asset.id) continue;
     const image = document.createElement("img");
     image.className = `message-asset ${asset.asset_type}`;
-    image.src = `/api/v1/message-assets/${encodeURIComponent(asset.id)}`;
+    image.src = `/api/v1/shops/${encodeURIComponent(state.shopId)}/message-assets/${encodeURIComponent(asset.id)}`;
     image.alt = asset.metadata?.alt || "聊天图片";
     image.loading = "lazy";
     image.addEventListener("error", () => image.remove());
@@ -422,11 +491,6 @@ function renderDetail(data) {
   els.header.className = "chat-head";
   els.header.replaceChildren();
   const info = node("div", "chat-identity");
-  const back = node("button", "embed-back", "‹");
-  back.type = "button";
-  back.setAttribute("aria-label", "返回会话列表");
-  back.addEventListener("click", closeEmbeddedConversation);
-  info.append(back);
   info.append(avatarNode(c, "header-avatar"));
   const identityText = node("div");
   identityText.append(node("h2", "", c.display_name), node("p", "", c.goods_name || "暂未关联商品卡片"));
@@ -453,23 +517,84 @@ function renderDetail(data) {
     els.goodsTag.textContent = "无上下文";
   }
   renderDecision(data.decision);
+  if (state.noteCustomerId !== c.customer_id) loadCustomerNote(c.customer_id);
 }
 
-function closeEmbeddedConversation() {
-  state.activeId = null;
-  state.detailRequest += 1;
-  els.header.className = "chat-head muted";
-  const copy = node("div");
-  copy.append(
-    node("h2", "", "请选择一个会话"),
-    node("p", "", "从会话列表进入中台辅助对话框")
-  );
-  els.header.replaceChildren(copy);
-  els.messages.replaceChildren(
-    node("div", "empty compact", "选择会话后查看聊天记录")
-  );
-  els.form.classList.add("hidden");
-  renderConversations();
+async function loadCustomerNote(customerId) {
+  state.noteCustomerId = customerId || null;
+  els.customerNoteForm.dataset.customerId = customerId || "";
+  els.customerNote.disabled = !customerId;
+  els.customerTags.disabled = !customerId;
+  els.customerNoteSave.disabled = !customerId;
+  if (!customerId) {
+    els.customerNote.value = ""; els.customerTags.value = "";
+    els.noteUpdatedAt.textContent = "未识别顾客";
+    return;
+  }
+  try {
+    const note = await api(`/customers/${encodeURIComponent(customerId)}/note`);
+    if (els.customerNoteForm.dataset.customerId !== customerId) return;
+    els.customerNote.value = note?.content || "";
+    els.customerTags.value = (note?.tags || []).join("，");
+    els.noteUpdatedAt.textContent = note?.updated_at ? `已更新 ${fmtTime(note.updated_at)}` : "暂无备注";
+  } catch (error) { toast(error.message, true); }
+}
+
+async function loadKnowledgeGaps() {
+  if (!state.shopId) return;
+  try {
+    const data = await api("/knowledge-gaps?status=open&limit=20");
+    els.gapCount.textContent = `${data.items.length} 条`;
+    els.knowledgeGapList.replaceChildren();
+    if (!data.items.length) {
+      els.knowledgeGapList.append(node("div", "decision-empty", "当前店铺暂无待处理缺口"));
+      return;
+    }
+    for (const gap of data.items) {
+      const item = node("div", "knowledge-gap-item");
+      item.append(
+        node("strong", "", gap.example_question),
+        node("span", "", `${gap.reason_code} · 出现 ${gap.occurrences} 次`)
+      );
+      const answer = document.createElement("textarea");
+      answer.className = "gap-answer";
+      answer.maxLength = 4000;
+      answer.placeholder = "填写审核用标准答案";
+      const actions = node("div", "gap-actions");
+      const createDraft = node("button", "gap-draft", "转为 QA 草稿");
+      createDraft.type = "button";
+      createDraft.addEventListener("click", async () => {
+        const standardAnswer = answer.value.trim();
+        if (!standardAnswer) {
+          toast("请先填写标准答案", true);
+          answer.focus();
+          return;
+        }
+        createDraft.disabled = true;
+        try {
+          await api(`/knowledge-gaps/${encodeURIComponent(gap.id)}/qa-draft`, {
+            method: "POST", body: JSON.stringify({ standard_answer: standardAnswer })
+          });
+          toast("QA 草稿已创建，需审核后才能启用");
+          await loadKnowledgeGaps();
+        } catch (error) {
+          toast(error.message, true);
+          createDraft.disabled = false;
+        }
+      });
+      const dismiss = node("button", "", "标记已处理");
+      dismiss.type = "button";
+      dismiss.addEventListener("click", async () => {
+        await api(`/knowledge-gaps/${encodeURIComponent(gap.id)}`, {
+          method: "PATCH", body: JSON.stringify({ status: "resolved" })
+        });
+        await loadKnowledgeGaps();
+      });
+      actions.append(createDraft, dismiss);
+      item.append(answer, actions);
+      els.knowledgeGapList.append(item);
+    }
+  } catch (error) { toast(error.message, true); }
 }
 
 function renderDecision(decision) {
@@ -482,12 +607,16 @@ function renderDecision(decision) {
     return;
   }
   els.decision.className = "";
-  els.decisionRoute.textContent = decision.route === "greeting"
+  els.decisionRoute.textContent = decision.route === "handoff"
+    ? "已转人工"
+    : decision.route === "product"
+      ? (decision.action === "auto_send" ? "商品咨询 · 自动发送" : "商品咨询 · 人工建议")
+    : decision.route === "greeting"
     ? (decision.action === "auto_send" ? "问候 · 自动发送" : "问候 · 人工建议")
     : (decision.action === "auto_send" ? "自动发送" : "人工建议");
   if (decision.suggested_answer) {
     els.decision.append(node("div", "decision-answer", decision.suggested_answer));
-    els.useSuggestion.classList.remove("hidden");
+    if (decision.action === "suggest") els.useSuggestion.classList.remove("hidden");
     els.useSuggestion.onclick = () => {
       els.input.value = decision.suggested_answer.slice(0, 400);
       els.input.dispatchEvent(new Event("input"));
@@ -504,6 +633,7 @@ function renderDecision(decision) {
     : (decision.recognition_source === "llm" ? "模型兜底" : "");
   const metrics = [
     decision.qa_code && `QA ${decision.qa_code}`,
+    decision.product_id && `商品 ${decision.product_name || decision.product_id}`,
     greetingLabel && `类型 ${greetingLabel}`,
     recognitionLabel,
     decision.top_score != null && `分数 ${decision.top_score.toFixed(3)}`,
@@ -541,7 +671,6 @@ function renderConnector(data) {
   syncConversationPermission(active);
   syncGlobalPermission();
   renderConversations();
-  renderShopWorkspace();
 }
 
 async function loadStatus() {
@@ -556,6 +685,176 @@ async function loadStatus() {
   }
   syncGlobalPermission();
   renderConversations();
+}
+
+function maskedShopId(value) {
+  if (!value) return "等待登录后识别";
+  if (value.length <= 6) return `${value.slice(0, 2)}***`;
+  return `${value.slice(0, 3)}***${value.slice(-3)}`;
+}
+
+function connectorLabel(status) {
+  return ({
+    stopped: "离线", starting: "正在启动", login_required: "等待登录",
+    ready: "监听中", degraded: "监听异常", error: "连接错误"
+  })[status] || "未知";
+}
+
+function renderOverview() {
+  const enabled = state.shops.filter((shop) => shop.lifecycle_status !== "disabled");
+  const totals = enabled.reduce((result, shop) => {
+    result.pending += shop.counts?.pending || 0;
+    result.overdue += shop.counts?.overdue || 0;
+    result.gaps += shop.counts?.knowledge_gaps || 0;
+    if (shop.connector?.status === "ready") result.online += 1;
+    return result;
+  }, { online: 0, pending: 0, overdue: 0, gaps: 0 });
+  els.overviewMetrics.replaceChildren(
+    ...[["在线店铺", totals.online], ["待处理", totals.pending], ["已超时", totals.overdue], ["知识缺口", totals.gaps]]
+      .map(([label, value]) => {
+        const metric = node("div", "metric");
+        metric.append(node("span", "", label), node("strong", "", String(value)));
+        return metric;
+      })
+  );
+  els.shopList.replaceChildren();
+  if (!state.shops.length) {
+    els.shopList.append(node("div", "empty compact", "尚未添加店铺"));
+    return;
+  }
+  for (const shop of state.shops) {
+    const row = node("div", "shop-row");
+    const identity = node("div", "shop-identity");
+    identity.append(
+      node("strong", "", shop.name),
+      node("small", "", `拼多多 ID ${maskedShopId(shop.platform_shop_id)} · ${shop.reception_mode === "guarded_auto" ? "受控自动" : "人机协同"}`)
+    );
+    const status = node("div", `shop-status ${shop.connector?.status || "stopped"}`);
+    status.append(node("i"), node("span", "", shop.lifecycle_status === "disabled" ? "已停用" : connectorLabel(shop.connector?.status)));
+    const counts = node("div", "shop-counts");
+    for (const [label, value] of [["待处理", shop.counts?.pending], ["即将超时", shop.counts?.due_soon], ["已超时", shop.counts?.overdue], ["知识缺口", shop.counts?.knowledge_gaps]]) {
+      const item = node("div", "shop-count");
+      item.append(node("b", "", String(value || 0)), node("span", "", label));
+      counts.append(item);
+    }
+    const actions = node("div", "shop-actions");
+    if (shop.lifecycle_status !== "disabled") {
+      const enter = node("button", "button primary", "进入店铺");
+      enter.addEventListener("click", () => enterShop(shop.id));
+      const focus = node("button", "button secondary", "显示窗口");
+      focus.disabled = shop.connector?.status === "stopped";
+      focus.addEventListener("click", () => shopAction(shop.id, "connector/focus"));
+      const online = shop.connector?.status !== "stopped";
+      const toggle = node("button", "button secondary", online ? "下线" : "上线");
+      toggle.addEventListener("click", () => shopAction(shop.id, `connector/${online ? "stop" : "start"}`));
+      const disable = node("button", "button danger", "停用");
+      disable.addEventListener("click", () => disableShop(shop));
+      actions.append(enter, focus, toggle, disable);
+    }
+    row.append(identity, status, counts, actions);
+    els.shopList.append(row);
+  }
+}
+
+async function loadShops() {
+  try {
+    const data = await api("/shops", { scope: false, signal: undefined });
+    state.shops = data.items;
+    renderOverview();
+    els.shopSwitcher.replaceChildren(...state.shops
+      .filter((shop) => shop.lifecycle_status !== "disabled")
+      .map((shop) => {
+        const option = document.createElement("option");
+        option.value = shop.id; option.textContent = shop.name;
+        return option;
+      }));
+    if (state.shopId) els.shopSwitcher.value = state.shopId;
+  } catch (error) {
+    if (error.name !== "AbortError") els.shopList.replaceChildren(node("div", "empty compact", error.message));
+  }
+}
+
+async function shopAction(shopId, action) {
+  try {
+    await api(`/shops/${encodeURIComponent(shopId)}/${action}`, { method: "POST", scope: false });
+    await loadShops();
+  } catch (error) { toast(error.message, true); }
+}
+
+async function disableShop(shop) {
+  if (!window.confirm(`停用“${shop.name}”？历史数据和登录目录会保留。`)) return;
+  try {
+    await api(`/shops/${encodeURIComponent(shop.id)}`, {
+      method: "PATCH", body: JSON.stringify({ enabled: false }), scope: false
+    });
+    if (state.shopId === shop.id) showOverview();
+    await loadShops();
+  } catch (error) { toast(error.message, true); }
+}
+
+function resetWorkspaceState() {
+  state.requestController.abort();
+  state.requestController = new AbortController();
+  state.detailRequest += 1;
+  state.activeId = null;
+  state.noteCustomerId = null;
+  state.conversations = [];
+  state.conversationSignature = "";
+  els.form.classList.add("hidden");
+  els.header.className = "chat-head muted";
+  els.header.innerHTML = "<div><h2>请选择一个会话</h2><p>顾客消息会通过独立浏览器同步到这里</p></div>";
+  els.messages.replaceChildren(node("div", "empty", "还没有打开会话"));
+  state.eventSource?.close();
+  state.eventSource = null;
+}
+
+async function enterShop(shopId) {
+  resetWorkspaceState();
+  state.shopId = shopId;
+  const shop = state.shops.find((item) => item.id === shopId);
+  els.overview.classList.add("hidden");
+  els.workspace.classList.remove("hidden");
+  els.workspaceActions.classList.remove("hidden");
+  els.brandContext.textContent = shop?.name || "店铺工作区";
+  els.shopSwitcher.value = shopId;
+  els.receptionMode.querySelectorAll("button").forEach((button) => {
+    button.classList.toggle("active", button.dataset.mode === shop?.reception_mode);
+  });
+  connectEvents();
+  await Promise.all([loadConversations(), loadStatus(), loadGreetingSettings(), loadHandoffSettings(), loadKnowledgeGaps()]);
+}
+
+function showOverview() {
+  resetWorkspaceState();
+  state.shopId = null;
+  els.workspace.classList.add("hidden");
+  els.workspaceActions.classList.add("hidden");
+  els.overview.classList.remove("hidden");
+  els.brandContext.textContent = "多店铺本地版";
+  loadShops();
+}
+
+function connectEvents() {
+  state.eventSource?.close();
+  if (!state.shopId) return;
+  const source = new EventSource(`/api/v1/shops/${encodeURIComponent(state.shopId)}/events`);
+  state.eventSource = source;
+  for (const type of ["conversation.upserted", "message.created", "outbound.updated", "reply.decision"]) {
+    source.addEventListener(type, async () => {
+      await loadConversations();
+      if (state.activeId) await openConversation(state.activeId);
+    });
+  }
+  source.addEventListener("connector.status", (event) => { try { renderConnector(JSON.parse(event.data).data); } catch {} });
+  source.addEventListener("knowledge_gap.updated", loadKnowledgeGaps);
+  source.addEventListener("automation.updated", (event) => {
+    try {
+      state.globalAutomation = JSON.parse(event.data).data.enabled;
+      els.globalAuto.checked = state.globalAutomation;
+      syncGlobalPermission(); renderConversations();
+    } catch {}
+  });
+  source.onerror = () => { els.connectorPill.querySelector("span").textContent = "实时通道重连中"; };
 }
 
 els.connectorButton.addEventListener("click", async () => {
@@ -585,11 +884,30 @@ els.convAuto.addEventListener("change", async () => {
   if (!state.activeId) return;
   const enabled = els.convAuto.checked;
   try {
-    await api(`/conversations/${state.activeId}/automation`, { method: "PUT", body: JSON.stringify({ enabled }) });
-    toast(enabled ? "该会话已恢复自动接待" : "该会话已由人工接待");
-    await loadConversations(); await openConversation(state.activeId);
-  } catch (error) { els.convAuto.checked = !enabled; toast(error.message, true); }
+    await updateConversationReception(state.activeId, enabled);
+  } finally {
+    const active = state.conversations.find((item) => item.id === state.activeId);
+    if (active) els.convAuto.checked = Boolean(active.auto_reply_enabled);
+  }
 });
+
+els.contextMenuManual.addEventListener("click", () => {
+  if (state.contextMenuId) updateConversationReception(state.contextMenuId, false);
+});
+els.contextMenuAuto.addEventListener("click", () => {
+  if (state.contextMenuId) updateConversationReception(state.contextMenuId, true);
+});
+els.contextMenuClearTimer.addEventListener("click", () => {
+  if (state.contextMenuId) clearConversationResponseTimer(state.contextMenuId);
+});
+document.addEventListener("click", (event) => {
+  if (!els.contextMenu.contains(event.target)) hideConversationContextMenu();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") hideConversationContextMenu();
+});
+window.addEventListener("resize", hideConversationContextMenu);
+els.list.addEventListener("scroll", hideConversationContextMenu, { passive: true });
 
 els.greetingForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -612,6 +930,23 @@ els.greetingReset.addEventListener("click", () => {
   toast("已填入默认配置，请点击保存后生效");
 });
 
+els.handoffForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const reply_template = els.handoffReply.value.trim();
+  if (!reply_template) { toast("转人工话术不能为空", true); return; }
+  els.handoffSave.disabled = true;
+  try {
+    renderHandoffSettings(await api("/automation/handoff", {
+      method: "PUT", body: JSON.stringify({ reply_template })
+    }));
+    toast("转人工话术已保存，下一条售后消息立即生效");
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    els.handoffSave.disabled = false;
+  }
+});
+
 els.form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const content = els.input.value.trim();
@@ -626,9 +961,56 @@ els.form.addEventListener("submit", async (event) => {
   } catch (error) { toast(error.message, true); }
   finally { els.send.disabled = state.connector !== "ready"; els.hint.textContent = ""; }
 });
+els.customerNoteForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const customerId = els.customerNoteForm.dataset.customerId;
+  if (!customerId) return;
+  els.customerNoteSave.disabled = true;
+  try {
+    const note = await api(`/customers/${encodeURIComponent(customerId)}/note`, {
+      method: "PUT",
+      body: JSON.stringify({
+        content: els.customerNote.value.trim(),
+        tags: els.customerTags.value.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean),
+        pinned: false
+      })
+    });
+    els.noteUpdatedAt.textContent = `已更新 ${fmtTime(note.updated_at)}`;
+    toast("顾客备注已保存");
+  } catch (error) { toast(error.message, true); }
+  finally { els.customerNoteSave.disabled = false; }
+});
 els.input.addEventListener("input", () => { els.charCount.textContent = `${els.input.value.length} / 400`; });
 els.input.addEventListener("keydown", (event) => { if (event.ctrlKey && event.key === "Enter") els.form.requestSubmit(); });
 $("refreshButton").addEventListener("click", loadConversations);
+els.addShop.addEventListener("click", async () => {
+  els.addShop.disabled = true;
+  try {
+    const shop = await api("/shops/provision", { method: "POST", scope: false });
+    await loadShops();
+    toast("已打开独立拼多多窗口，请完成登录");
+    await enterShop(shop.id);
+  } catch (error) { toast(error.message, true); }
+  finally { els.addShop.disabled = false; }
+});
+els.overviewButton.addEventListener("click", showOverview);
+els.shopSwitcher.addEventListener("change", () => enterShop(els.shopSwitcher.value));
+els.focusButton.addEventListener("click", async () => {
+  if (state.shopId) await shopAction(state.shopId, "connector/focus");
+});
+els.receptionMode.querySelectorAll("button").forEach((button) => {
+  button.addEventListener("click", async () => {
+    if (!state.shopId) return;
+    try {
+      await api(`/shops/${encodeURIComponent(state.shopId)}`, {
+        method: "PATCH", body: JSON.stringify({ reception_mode: button.dataset.mode }), scope: false
+      });
+      await loadShops();
+      els.receptionMode.querySelectorAll("button").forEach((item) => item.classList.toggle("active", item === button));
+      toast(button.dataset.mode === "guarded_auto" ? "已切换为受控自动" : "已切换为人机协同");
+    } catch (error) { toast(error.message, true); }
+  });
+});
 
 let searchTimer;
 $("searchInput").addEventListener("input", (event) => {
@@ -639,25 +1021,9 @@ document.querySelectorAll(".filters button").forEach((button) => button.addEvent
   button.classList.add("active"); state.filter = button.dataset.state; loadConversations();
 }));
 
-const eventSource = new EventSource("/api/v1/events");
-for (const type of ["conversation.upserted", "message.created", "outbound.updated", "reply.decision"]) {
-  eventSource.addEventListener(type, async () => { await loadConversations(); if (state.activeId) await openConversation(state.activeId); });
-}
-eventSource.addEventListener("connector.status", (event) => { try { renderConnector(JSON.parse(event.data).data); } catch {} });
-eventSource.addEventListener("automation.updated", (event) => {
-  try {
-    state.globalAutomation = JSON.parse(event.data).data.enabled;
-    els.globalAuto.checked = state.globalAutomation;
-    syncGlobalPermission();
-    renderConversations();
-    syncConversationPermission(state.conversations.find((item) => item.id === state.activeId));
-  } catch {}
-});
-eventSource.onerror = () => { els.connectorPill.querySelector("span").textContent = "实时通道重连中"; };
-
 // SSE 断线重连期间仍定时校准，避免消息已经入库但当前聊天没有刷新。
 setInterval(async () => {
-  if (document.hidden) return;
+  if (document.hidden || !state.shopId) return;
   await loadConversations();
   if (state.activeId) await openConversation(state.activeId);
 }, 3000);
@@ -667,4 +1033,4 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) updateResponseTimers();
 });
 
-await Promise.all([loadConversations(), loadStatus(), loadShop(), loadGreetingSettings()]);
+await loadShops();

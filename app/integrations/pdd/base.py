@@ -77,6 +77,14 @@ class CustomerProfile:
     avatar_url: str | None = None
 
 
+@dataclass(slots=True, frozen=True)
+class ShopIdentity:
+    """从登录后可见页面读取的稳定店铺身份。"""
+
+    platform_shop_id: str
+    name: str
+
+
 @dataclass(slots=True)
 class ConnectorStatusSnapshot:
     status: ConnectorStatus
@@ -143,3 +151,11 @@ class CustomerServiceConnector(ABC):
         """返回不含正文、Cookie 和属性值的结构诊断。"""
         snapshot = await self.status()
         return {"status": snapshot.status.value, "frames": []}
+
+    async def identity(self) -> ShopIdentity | None:
+        """返回当前页面已确认的稳定店铺身份。"""
+        return None
+
+    async def focus(self) -> None:
+        """将平台窗口带到前台；不支持时明确失败。"""
+        raise ConnectorError("连接器不支持窗口聚焦")

@@ -1,4 +1,4 @@
-"""单店客服控制台的持久化模型。"""
+"""多店铺客服控制台的持久化模型。"""
 
 from __future__ import annotations
 
@@ -33,14 +33,36 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def default_handoff_reply_template() -> str:
+    return "您好，您反馈的售后问题已为您转接人工客服处理，请您稍候。"
+
+
 class Shop(Base):
-    """已接入的平台店铺；首版只创建一个默认店铺。"""
+    """已接入的平台店铺及其独立浏览器运行配置。"""
 
     __tablename__ = "shops"
+    __table_args__ = (
+        UniqueConstraint("platform", "platform_shop_id", name="uq_shop_platform_id"),
+        UniqueConstraint("browser_profile_key", name="uq_shop_profile_key"),
+        Index("ix_shops_lifecycle_online", "lifecycle_status", "desired_online"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     platform: Mapped[str] = mapped_column(String(32), default="pdd", nullable=False)
     name: Mapped[str] = mapped_column(String(255), default="拼多多店铺", nullable=False)
+    platform_shop_id: Mapped[str | None] = mapped_column(String(191))
+    lifecycle_status: Mapped[str] = mapped_column(
+        String(24), default="provisioning", nullable=False
+    )
+    desired_online: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    browser_profile_key: Mapped[str] = mapped_column(
+        String(64), default=_uuid, nullable=False
+    )
+    reception_mode: Mapped[str] = mapped_column(
+        String(24), default="assist", nullable=False
+    )
+    identified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error_code: Mapped[str | None] = mapped_column(String(64))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     global_auto_reply_enabled: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
@@ -86,6 +108,25 @@ class ShopGreetingConfig(Base):
     )
 
 
+class ShopHandoffConfig(Base):
+    """店铺级售后人工接管话术。"""
+
+    __tablename__ = "shop_handoff_configs"
+
+    shop_id: Mapped[str] = mapped_column(
+        ForeignKey("shops.id", ondelete="CASCADE"), primary_key=True
+    )
+    reply_template: Mapped[str] = mapped_column(
+        String(400), default=default_handoff_reply_template, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
+    )
+
+
 class Customer(Base):
     """平台稳定顾客实体；昵称和头像是可变的当前资料。"""
 
@@ -115,6 +156,30 @@ class Customer(Base):
     )
 
     shop: Mapped[Shop] = relationship(back_populates="customers")
+    note: Mapped["CustomerNote | None"] = relationship(
+        back_populates="customer", cascade="all, delete-orphan", uselist=False
+    )
+
+
+class CustomerNote(Base):
+    """人工维护的顾客备注；不会自动进入模型上下文。"""
+
+    __tablename__ = "customer_notes"
+
+    customer_id: Mapped[str] = mapped_column(
+        ForeignKey("customers.id", ondelete="CASCADE"), primary_key=True
+    )
+    shop_id: Mapped[str] = mapped_column(
+        ForeignKey("shops.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    content: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
+    )
+
+    customer: Mapped[Customer] = relationship(back_populates="note")
 
 
 class AgentAccount(Base):
@@ -196,7 +261,7 @@ class Message(Base):
 
     __tablename__ = "messages"
     __table_args__ = (
-        UniqueConstraint("fingerprint", name="uq_messages_fingerprint"),
+        UniqueConstraint("shop_id", "fingerprint", name="uq_messages_shop_fingerprint"),
         Index("ix_messages_conversation_time", "conversation_id", "occurred_at"),
         Index("ix_messages_customer_day", "customer_id", "message_date", "occurred_at"),
         Index("ix_messages_shop_day", "shop_id", "message_date", "occurred_at"),
@@ -207,8 +272,8 @@ class Message(Base):
     conversation_id: Mapped[str] = mapped_column(
         ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
     )
-    shop_id: Mapped[str | None] = mapped_column(
-        ForeignKey("shops.id", ondelete="CASCADE")
+    shop_id: Mapped[str] = mapped_column(
+        ForeignKey("shops.id", ondelete="CASCADE"), nullable=False
     )
     customer_id: Mapped[str | None] = mapped_column(
         ForeignKey("customers.id", ondelete="SET NULL")
@@ -271,11 +336,16 @@ class OutboundJob(Base):
 
     __tablename__ = "outbound_jobs"
     __table_args__ = (
-        UniqueConstraint("client_request_id", name="uq_outbound_client_request"),
+        UniqueConstraint(
+            "shop_id", "client_request_id", name="uq_outbound_shop_client_request"
+        ),
         Index("ix_outbound_status", "status"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    shop_id: Mapped[str] = mapped_column(
+        ForeignKey("shops.id", ondelete="CASCADE"), nullable=False
+    )
     conversation_id: Mapped[str] = mapped_column(
         ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
     )
@@ -290,6 +360,9 @@ class OutboundJob(Base):
     responder_display_name: Mapped[str | None] = mapped_column(String(255))
     clicked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    response_deadline_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, nullable=False
     )
@@ -303,11 +376,14 @@ class ReplyDecision(Base):
 
     __tablename__ = "reply_decisions"
     __table_args__ = (
-        UniqueConstraint("batch_key", name="uq_reply_decision_batch"),
+        UniqueConstraint("shop_id", "batch_key", name="uq_reply_decision_shop_batch"),
         Index("ix_reply_decisions_conversation", "conversation_id", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    shop_id: Mapped[str] = mapped_column(
+        ForeignKey("shops.id", ondelete="CASCADE"), nullable=False
+    )
     conversation_id: Mapped[str] = mapped_column(
         ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
     )
@@ -317,6 +393,8 @@ class ReplyDecision(Base):
     greeting_type: Mapped[str | None] = mapped_column(String(32))
     recognition_source: Mapped[str | None] = mapped_column(String(16))
     qa_code: Mapped[str | None] = mapped_column(String(128))
+    product_id: Mapped[str | None] = mapped_column(String(64))
+    product_name: Mapped[str | None] = mapped_column(String(500))
     top_score: Mapped[float | None] = mapped_column(Float)
     score_margin: Mapped[float | None] = mapped_column(Float)
     risk_reason: Mapped[str | None] = mapped_column(String(255))
@@ -337,8 +415,43 @@ class ConnectorEvent(Base):
         primary_key=True,
         autoincrement=True,
     )
+    shop_id: Mapped[str | None] = mapped_column(
+        ForeignKey("shops.id", ondelete="CASCADE"), index=True
+    )
     event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, nullable=False, index=True
+    )
+
+
+class KnowledgeGap(Base):
+    """按店铺和商品聚合的知识缺口，必须经人工审核后才能转为 QA。"""
+
+    __tablename__ = "knowledge_gaps"
+    __table_args__ = (
+        UniqueConstraint(
+            "shop_id", "product_id", "normalized_question", "reason_code",
+            name="uq_knowledge_gap_scope",
+        ),
+        Index("ix_knowledge_gaps_shop_status", "shop_id", "status", "last_seen_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    shop_id: Mapped[str] = mapped_column(
+        ForeignKey("shops.id", ondelete="CASCADE"), nullable=False
+    )
+    product_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    normalized_question: Mapped[str] = mapped_column(String(500), nullable=False)
+    example_question: Mapped[str] = mapped_column(Text, nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    occurrences: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="open", nullable=False)
+    candidate_answer: Mapped[str | None] = mapped_column(Text)
+    linked_qa_code: Mapped[str | None] = mapped_column(String(100))
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
     )

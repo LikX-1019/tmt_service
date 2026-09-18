@@ -25,13 +25,18 @@ from app.models.conversation import (
     ConnectorEvent,
     Conversation,
     Customer,
+    CustomerNote,
+    KnowledgeGap,
     Message,
     MessageAsset,
     OutboundJob,
     ReplyDecision,
     Shop,
     ShopGreetingConfig,
+    ShopHandoffConfig,
+    default_handoff_reply_template,
 )
+from app.models.knowledge import QAKnowledge
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -50,9 +55,14 @@ def _message_date(value: datetime) -> date:
     return value.astimezone(ZoneInfo("Asia/Shanghai")).date()
 
 
+def _aware_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
 def conversation_to_dict(item: Conversation) -> dict[str, Any]:
     return {
         "id": item.id,
+        "shop_id": item.shop_id,
         "platform_conversation_id": item.platform_conversation_id,
         "customer_id": item.customer_id,
         "display_name": item.display_name,
@@ -78,6 +88,7 @@ def message_to_dict(item: Message) -> dict[str, Any]:
     assets = [] if loaded_assets is NO_VALUE else loaded_assets
     return {
         "id": item.id,
+        "shop_id": item.shop_id,
         "direction": item.direction,
         "kind": item.kind,
         "content": item.content,
@@ -109,6 +120,7 @@ def message_to_dict(item: Message) -> dict[str, Any]:
 def job_to_dict(item: OutboundJob) -> dict[str, Any]:
     return {
         "id": item.id,
+        "shop_id": item.shop_id,
         "conversation_id": item.conversation_id,
         "client_request_id": item.client_request_id,
         "source": item.source,
@@ -119,6 +131,7 @@ def job_to_dict(item: OutboundJob) -> dict[str, Any]:
         "responder_display_name": item.responder_display_name,
         "clicked_at": _iso(item.clicked_at),
         "sent_at": _iso(item.sent_at),
+        "response_deadline_at": _iso(item.response_deadline_at),
         "created_at": _iso(item.created_at),
     }
 
@@ -128,11 +141,14 @@ def decision_to_dict(item: ReplyDecision | None) -> dict[str, Any] | None:
         return None
     return {
         "id": item.id,
+        "shop_id": item.shop_id,
         "route": item.route,
         "action": item.action,
         "greeting_type": item.greeting_type,
         "recognition_source": item.recognition_source,
         "qa_code": item.qa_code,
+        "product_id": item.product_id,
+        "product_name": item.product_name,
         "top_score": item.top_score,
         "score_margin": item.score_margin,
         "risk_reason": item.risk_reason,
@@ -148,6 +164,62 @@ def greeting_config_to_dict(item: ShopGreetingConfig) -> dict[str, Any]:
         "trigger_groups": item.trigger_groups,
         "reply_templates": normalize_reply_templates(item.reply_templates),
         "updated_at": _iso(item.updated_at),
+    }
+
+
+def handoff_config_to_dict(item: ShopHandoffConfig) -> dict[str, Any]:
+    return {
+        "reply_template": item.reply_template,
+        "updated_at": _iso(item.updated_at),
+    }
+
+
+def shop_to_dict(item: Shop) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "platform": item.platform,
+        "name": item.name,
+        "platform_shop_id": item.platform_shop_id,
+        "lifecycle_status": item.lifecycle_status,
+        "desired_online": item.desired_online,
+        "browser_profile_key": item.browser_profile_key,
+        "reception_mode": item.reception_mode,
+        "identified_at": _iso(item.identified_at),
+        "last_error_code": item.last_error_code,
+        "enabled": item.enabled,
+        "global_auto_reply_enabled": item.global_auto_reply_enabled,
+        "created_at": _iso(item.created_at),
+        "updated_at": _iso(item.updated_at),
+    }
+
+
+def note_to_dict(item: CustomerNote | None) -> dict[str, Any] | None:
+    if item is None:
+        return None
+    return {
+        "customer_id": item.customer_id,
+        "shop_id": item.shop_id,
+        "content": item.content,
+        "tags": list(item.tags or []),
+        "pinned": item.pinned,
+        "updated_at": _iso(item.updated_at),
+    }
+
+
+def knowledge_gap_to_dict(item: KnowledgeGap) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "shop_id": item.shop_id,
+        "product_id": item.product_id or None,
+        "normalized_question": item.normalized_question,
+        "example_question": item.example_question,
+        "reason_code": item.reason_code,
+        "occurrences": item.occurrences,
+        "status": item.status,
+        "candidate_answer": item.candidate_answer,
+        "linked_qa_code": item.linked_qa_code,
+        "first_seen_at": _iso(item.first_seen_at),
+        "last_seen_at": _iso(item.last_seen_at),
     }
 
 
@@ -173,28 +245,173 @@ class ConsoleRepository:
                 select(Shop).where(Shop.platform == "pdd").order_by(Shop.created_at)
             )
             if item is None:
-                item = Shop(name=name, platform="pdd")
+                item = Shop(
+                    name=name,
+                    platform="pdd",
+                    lifecycle_status="active",
+                    browser_profile_key="legacy",
+                )
                 session.add(item)
                 await session.commit()
                 await session.refresh(item)
-            return {
-                "id": item.id,
-                "platform": item.platform,
-                "name": item.name,
-                "global_auto_reply_enabled": item.global_auto_reply_enabled,
-            }
+            return shop_to_dict(item)
+
+    async def create_provisioning_shop(
+        self, *, name: str = "待识别店铺", browser_profile_key: str
+    ) -> dict[str, Any]:
+        async with self._session_factory() as session:
+            item = Shop(
+                name=name,
+                platform="pdd",
+                lifecycle_status="provisioning",
+                desired_online=True,
+                browser_profile_key=browser_profile_key,
+                reception_mode="assist",
+                enabled=True,
+                global_auto_reply_enabled=False,
+            )
+            session.add(item)
+            await session.commit()
+            await session.refresh(item)
+            return shop_to_dict(item)
+
+    async def list_shops(
+        self, *, include_disabled: bool = True
+    ) -> list[dict[str, Any]]:
+        async with self._session_factory() as session:
+            statement = select(Shop).order_by(Shop.created_at, Shop.id)
+            if not include_disabled:
+                statement = statement.where(Shop.lifecycle_status != "disabled")
+            items = list(await session.scalars(statement))
+            result: list[dict[str, Any]] = []
+            now = datetime.now(timezone.utc)
+            warning_boundary = now + timedelta(seconds=30)
+            for item in items:
+                summary = shop_to_dict(item)
+                counts = (
+                    await session.execute(
+                        select(
+                            func.count(Conversation.id),
+                            func.sum(case((Conversation.state == "pending", 1), else_=0)),
+                            func.sum(
+                                case(
+                                    (
+                                        Conversation.response_deadline_at.is_not(None)
+                                        & (Conversation.response_deadline_at <= warning_boundary)
+                                        & (Conversation.response_deadline_at > now),
+                                        1,
+                                    ),
+                                    else_=0,
+                                )
+                            ),
+                            func.sum(
+                                case(
+                                    (
+                                        Conversation.response_deadline_at.is_not(None)
+                                        & (Conversation.response_deadline_at <= now),
+                                        1,
+                                    ),
+                                    else_=0,
+                                )
+                            ),
+                        ).where(Conversation.shop_id == item.id)
+                    )
+                ).one()
+                gap_count = await session.scalar(
+                    select(func.count(KnowledgeGap.id)).where(
+                        KnowledgeGap.shop_id == item.id,
+                        KnowledgeGap.status == "open",
+                    )
+                )
+                summary["counts"] = {
+                    "conversations": int(counts[0] or 0),
+                    "pending": int(counts[1] or 0),
+                    "due_soon": int(counts[2] or 0),
+                    "overdue": int(counts[3] or 0),
+                    "knowledge_gaps": int(gap_count or 0),
+                }
+                result.append(summary)
+            return result
 
     async def get_shop(self, shop_id: str) -> dict[str, Any] | None:
         async with self._session_factory() as session:
             item = await session.get(Shop, shop_id)
             if item is None:
                 return None
-            return {
-                "id": item.id,
-                "platform": item.platform,
-                "name": item.name,
-                "global_auto_reply_enabled": item.global_auto_reply_enabled,
-            }
+            return shop_to_dict(item)
+
+    async def identify_shop(
+        self, shop_id: str, *, platform_shop_id: str, name: str
+    ) -> tuple[dict[str, Any], str | None]:
+        """绑定稳定平台账号；重复时返回已有店铺 ID，绝不按名称猜测。"""
+        platform_shop_id = platform_shop_id.strip()
+        name = name.strip()
+        if not platform_shop_id or not name:
+            raise ValueError("平台店铺 ID 和名称不能为空")
+        async with self._session_factory() as session:
+            item = await session.get(Shop, shop_id)
+            if item is None:
+                raise LookupError("店铺不存在")
+            duplicate = await session.scalar(
+                select(Shop).where(
+                    Shop.platform == item.platform,
+                    Shop.platform_shop_id == platform_shop_id,
+                    Shop.id != shop_id,
+                )
+            )
+            if duplicate is not None:
+                item.lifecycle_status = "failed"
+                item.desired_online = False
+                item.last_error_code = "DUPLICATE_SHOP_ACCOUNT"
+                await session.commit()
+                return shop_to_dict(item), duplicate.id
+            item.platform_shop_id = platform_shop_id
+            item.name = name[:255]
+            item.lifecycle_status = "active"
+            item.identified_at = datetime.now(timezone.utc)
+            item.last_error_code = None
+            await session.commit()
+            await session.refresh(item)
+            return shop_to_dict(item), None
+
+    async def update_shop_state(
+        self,
+        shop_id: str,
+        *,
+        lifecycle_status: str | None = None,
+        desired_online: bool | None = None,
+        enabled: bool | None = None,
+        reception_mode: str | None = None,
+        last_error_code: str | None = None,
+    ) -> dict[str, Any]:
+        if lifecycle_status is not None and lifecycle_status not in {
+            "provisioning",
+            "active",
+            "failed",
+            "disabled",
+        }:
+            raise ValueError("无效店铺生命周期状态")
+        if reception_mode is not None and reception_mode not in {
+            "assist",
+            "guarded_auto",
+        }:
+            raise ValueError("无效接待模式")
+        async with self._session_factory() as session:
+            item = await session.get(Shop, shop_id)
+            if item is None:
+                raise LookupError("店铺不存在")
+            if lifecycle_status is not None:
+                item.lifecycle_status = lifecycle_status
+            if desired_online is not None:
+                item.desired_online = desired_online
+            if enabled is not None:
+                item.enabled = enabled
+            if reception_mode is not None:
+                item.reception_mode = reception_mode
+            item.last_error_code = last_error_code
+            await session.commit()
+            await session.refresh(item)
+            return shop_to_dict(item)
 
     async def set_global_automation(self, shop_id: str, enabled: bool) -> dict[str, Any]:
         async with self._session_factory() as session:
@@ -252,6 +469,44 @@ class ConsoleRepository:
             await session.commit()
             await session.refresh(item)
             return greeting_config_to_dict(item)
+
+    async def get_handoff_config(self, shop_id: str) -> dict[str, Any]:
+        """读取售后接管话术；历史店铺首次使用时创建安全默认值。"""
+        async with self._session_factory() as session:
+            item = await session.get(ShopHandoffConfig, shop_id)
+            if item is None:
+                if await session.get(Shop, shop_id) is None:
+                    raise LookupError("店铺不存在")
+                item = ShopHandoffConfig(
+                    shop_id=shop_id, reply_template=default_handoff_reply_template()
+                )
+                session.add(item)
+                try:
+                    await session.commit()
+                except IntegrityError:
+                    await session.rollback()
+                    item = await session.get(ShopHandoffConfig, shop_id)
+                    if item is None:
+                        raise
+                else:
+                    await session.refresh(item)
+            return handoff_config_to_dict(item)
+
+    async def update_handoff_config(
+        self, shop_id: str, *, reply_template: str
+    ) -> dict[str, Any]:
+        async with self._session_factory() as session:
+            if await session.get(Shop, shop_id) is None:
+                raise LookupError("店铺不存在")
+            item = await session.get(ShopHandoffConfig, shop_id)
+            if item is None:
+                item = ShopHandoffConfig(shop_id=shop_id)
+                session.add(item)
+            item.reply_template = reply_template
+            item.updated_at = datetime.now(timezone.utc)
+            await session.commit()
+            await session.refresh(item)
+            return handoff_config_to_dict(item)
 
     async def _resolve_profile(
         self,
@@ -435,12 +690,18 @@ class ConsoleRepository:
                     sender_type=sender_type,
                 )
                 existing = await session.scalar(
-                    select(Message).options(selectinload(Message.assets)).where(Message.fingerprint == payload["fingerprint"])
+                    select(Message)
+                    .options(selectinload(Message.assets))
+                    .where(
+                        Message.shop_id == shop_id,
+                        Message.fingerprint == payload["fingerprint"],
+                    )
                 )
                 if existing is None and payload.get("platform_message_id"):
                     same_platform = list(
                         await session.scalars(
                             select(Message).options(selectinload(Message.assets)).where(
+                                Message.shop_id == shop_id,
                                 Message.platform_message_id
                                 == payload["platform_message_id"]
                             )
@@ -568,27 +829,52 @@ class ConsoleRepository:
             items = (await session.scalars(statement)).all()
             return [conversation_to_dict(item) for item in items]
 
-    async def get_conversation(self, conversation_id: str) -> dict[str, Any] | None:
+    async def get_conversation(
+        self, conversation_id: str, shop_id: str | None = None
+    ) -> dict[str, Any] | None:
         async with self._session_factory() as session:
             item = await session.get(Conversation, conversation_id)
+            if item is not None and shop_id is not None and item.shop_id != shop_id:
+                return None
             return conversation_to_dict(item) if item else None
 
-    async def mark_conversation_read(self, conversation_id: str) -> dict[str, Any]:
+    async def mark_conversation_read(
+        self, conversation_id: str, shop_id: str | None = None
+    ) -> dict[str, Any]:
         async with self._session_factory() as session:
             item = await session.get(Conversation, conversation_id)
-            if item is None:
+            if item is None or (shop_id is not None and item.shop_id != shop_id):
                 raise LookupError("会话不存在")
             item.unread_count = 0
             await session.commit()
             return conversation_to_dict(item)
 
+    async def clear_conversation_response_timer(
+        self, conversation_id: str, shop_id: str | None = None
+    ) -> dict[str, Any]:
+        async with self._session_factory() as session:
+            item = await session.get(Conversation, conversation_id)
+            if item is None or (shop_id is not None and item.shop_id != shop_id):
+                raise LookupError("会话不存在")
+            item.response_started_at = None
+            item.response_deadline_at = None
+            await session.commit()
+            return conversation_to_dict(item)
+
     async def list_messages(
-        self, conversation_id: str, *, limit: int, before: datetime | None = None
+        self,
+        conversation_id: str,
+        *,
+        limit: int,
+        before: datetime | None = None,
+        shop_id: str | None = None,
     ) -> list[dict[str, Any]]:
         statement = select(Message).options(selectinload(Message.assets)).where(
             Message.conversation_id == conversation_id,
             Message.assignment_verified.is_(True),
         )
+        if shop_id is not None:
+            statement = statement.where(Message.shop_id == shop_id)
         if before:
             statement = statement.where(Message.occurred_at < before)
         statement = statement.order_by(desc(Message.occurred_at), desc(Message.id)).limit(limit)
@@ -624,11 +910,14 @@ class ConsoleRepository:
         *,
         message_date: date | None = None,
         limit: int = 200,
+        shop_id: str | None = None,
     ) -> list[dict[str, Any]]:
         statement = select(Message).options(selectinload(Message.assets)).where(
             Message.customer_id == customer_id,
             Message.assignment_verified.is_(True),
         )
+        if shop_id is not None:
+            statement = statement.where(Message.shop_id == shop_id)
         if message_date:
             statement = statement.where(Message.message_date == message_date)
         statement = statement.order_by(desc(Message.occurred_at), desc(Message.id)).limit(limit)
@@ -638,11 +927,11 @@ class ConsoleRepository:
             return [message_to_dict(item) for item in items]
 
     async def set_conversation_automation(
-        self, conversation_id: str, enabled: bool
+        self, conversation_id: str, enabled: bool, shop_id: str | None = None
     ) -> dict[str, Any]:
         async with self._session_factory() as session:
             item = await session.get(Conversation, conversation_id)
-            if item is None:
+            if item is None or (shop_id is not None and item.shop_id != shop_id):
                 raise LookupError("会话不存在")
             item.auto_reply_enabled = enabled
             item.state = "pending" if enabled else "manual"
@@ -660,8 +949,13 @@ class ConsoleRepository:
         content: str,
     ) -> tuple[dict[str, Any], bool]:
         async with self._session_factory() as session:
+            conversation = await session.get(Conversation, conversation_id)
+            if conversation is None:
+                raise LookupError("会话不存在")
+            shop_id = conversation.shop_id
             existing = await session.scalar(
                 select(OutboundJob).where(
+                    OutboundJob.shop_id == shop_id,
                     OutboundJob.client_request_id == client_request_id
                 )
             )
@@ -672,29 +966,26 @@ class ConsoleRepository:
                     raise ValueError("client_request_id 已用于另一发送请求")
                 return job_to_dict(existing), False
             job = OutboundJob(
+                shop_id=shop_id,
                 conversation_id=conversation_id,
                 client_request_id=client_request_id,
                 source=source,
                 content=content,
+                response_deadline_at=conversation.response_deadline_at,
             )
             session.add(job)
             if source == "manual":
-                conversation = await session.get(Conversation, conversation_id)
-                if conversation is None:
-                    raise LookupError("会话不存在")
                 conversation.auto_reply_enabled = False
                 conversation.state = "manual"
                 conversation.unread_count = 0
-            else:
-                conversation = await session.get(Conversation, conversation_id)
-            if conversation is not None:
-                conversation.last_outbound_status = "queued"
+            conversation.last_outbound_status = "queued"
             try:
                 await session.commit()
             except IntegrityError:
                 await session.rollback()
                 existing = await session.scalar(
                     select(OutboundJob).where(
+                        OutboundJob.shop_id == shop_id,
                         OutboundJob.client_request_id == client_request_id
                     )
                 )
@@ -708,24 +999,82 @@ class ConsoleRepository:
             await session.refresh(job)
             return job_to_dict(job), True
 
-    async def get_job(self, job_id: str) -> dict[str, Any] | None:
+    async def handoff_conversation(
+        self,
+        conversation_id: str,
+        *,
+        client_request_id: str,
+        content: str | None,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None, bool]:
+        """原子关闭自动接待并可选地入队固定转人工话术。"""
+        async with self._session_factory() as session:
+            conversation = await session.get(Conversation, conversation_id)
+            if conversation is None:
+                raise LookupError("会话不存在")
+            shop_id = conversation.shop_id
+            conversation.auto_reply_enabled = False
+            conversation.state = "manual"
+            job: OutboundJob | None = None
+            created = False
+            if content:
+                existing = await session.scalar(
+                    select(OutboundJob).where(
+                        OutboundJob.shop_id == shop_id,
+                        OutboundJob.client_request_id == client_request_id
+                    )
+                )
+                if existing is not None:
+                    if not _same_idempotent_request(
+                        existing, conversation_id, "handoff", content
+                    ):
+                        raise ValueError("client_request_id 已用于另一发送请求")
+                    job = existing
+                else:
+                    job = OutboundJob(
+                        shop_id=shop_id,
+                        conversation_id=conversation_id,
+                        client_request_id=client_request_id,
+                        source="handoff",
+                        content=content,
+                        response_deadline_at=conversation.response_deadline_at,
+                    )
+                    session.add(job)
+                    conversation.last_outbound_status = "queued"
+                    created = True
+            await session.commit()
+            if job is not None:
+                await session.refresh(job)
+            return conversation_to_dict(conversation), job_to_dict(job) if job else None, created
+
+    async def get_job(
+        self, job_id: str, shop_id: str | None = None
+    ) -> dict[str, Any] | None:
         async with self._session_factory() as session:
             item = await session.get(OutboundJob, job_id)
+            if item is not None and shop_id is not None and item.shop_id != shop_id:
+                return None
             return job_to_dict(item) if item else None
 
-    async def recover_queued_jobs(self) -> list[dict[str, Any]]:
+    async def recover_queued_jobs(
+        self, shop_id: str | None = None
+    ) -> list[dict[str, Any]]:
         async with self._session_factory() as session:
             # 进程可能在点击前后任一时刻退出，sending 无法证明未点击，只能转 uncertain。
+            sending_filter = [OutboundJob.status == "sending"]
+            queued_filter = [OutboundJob.status == "queued"]
+            if shop_id is not None:
+                sending_filter.append(OutboundJob.shop_id == shop_id)
+                queued_filter.append(OutboundJob.shop_id == shop_id)
             sending_conversations = list(
                 await session.scalars(
                     select(OutboundJob.conversation_id).where(
-                        OutboundJob.status == "sending"
+                        *sending_filter
                     )
                 )
             )
             await session.execute(
                 update(OutboundJob)
-                .where(OutboundJob.status == "sending")
+                .where(*sending_filter)
                 .values(status="uncertain", error_code="RECOVERY_UNCERTAIN")
             )
             if sending_conversations:
@@ -738,11 +1087,33 @@ class ConsoleRepository:
             items = (
                 await session.scalars(
                     select(OutboundJob)
-                    .where(OutboundJob.status == "queued")
+                    .where(*queued_filter)
                     .order_by(OutboundJob.created_at)
                 )
             ).all()
             return [job_to_dict(item) for item in items]
+
+    async def cancel_queued_jobs(self, shop_id: str) -> int:
+        """下线时仅取消尚未开始点击的任务。"""
+        async with self._session_factory() as session:
+            result = await session.execute(
+                update(OutboundJob)
+                .where(
+                    OutboundJob.shop_id == shop_id,
+                    OutboundJob.status == "queued",
+                )
+                .values(status="cancelled", error_code="SHOP_OFFLINE")
+            )
+            await session.execute(
+                update(Conversation)
+                .where(
+                    Conversation.shop_id == shop_id,
+                    Conversation.last_outbound_status == "queued",
+                )
+                .values(last_outbound_status="cancelled")
+            )
+            await session.commit()
+            return int(result.rowcount or 0)
 
     async def update_job(
         self,
@@ -753,13 +1124,14 @@ class ConsoleRepository:
         clicked_at: datetime | None = None,
         sent_at: datetime | None = None,
         responder_name: str | None = None,
+        shop_id: str | None = None,
     ) -> dict[str, Any]:
         async with self._session_factory() as session:
             job = await session.get(OutboundJob, job_id)
-            if job is None:
+            if job is None or (shop_id is not None and job.shop_id != shop_id):
                 raise LookupError("发送任务不存在")
             allowed = {
-                "queued": {"sending", "failed"},
+                "queued": {"sending", "failed", "cancelled"},
                 "sending": {"sent", "uncertain", "failed"},
             }
             if status != job.status and status not in allowed.get(job.status, set()):
@@ -774,7 +1146,7 @@ class ConsoleRepository:
                     session,
                     conversation.shop_id,
                     display_name=responder_name,
-                    sender_type="automation" if job.source == "auto" else "agent",
+                    sender_type="automation" if job.source in {"auto", "handoff"} else "agent",
                 )
                 job.responder_account_id = account.id if account else None
                 job.responder_display_name = responder_name
@@ -791,32 +1163,59 @@ class ConsoleRepository:
             await session.refresh(job)
             return job_to_dict(job)
 
-    async def add_decision(self, conversation_id: str, data: dict[str, Any]) -> dict[str, Any]:
+    async def add_decision(
+        self, conversation_id: str, data: dict[str, Any], shop_id: str | None = None
+    ) -> dict[str, Any]:
         async with self._session_factory() as session:
+            conversation = await session.get(Conversation, conversation_id)
+            if conversation is None or (
+                shop_id is not None and conversation.shop_id != shop_id
+            ):
+                raise LookupError("会话不存在")
+            shop_id = conversation.shop_id
             existing = await session.scalar(
-                select(ReplyDecision).where(ReplyDecision.batch_key == data["batch_key"])
+                select(ReplyDecision).where(
+                    ReplyDecision.shop_id == shop_id,
+                    ReplyDecision.batch_key == data["batch_key"],
+                )
             )
             if existing:
                 return decision_to_dict(existing) or {}
-            item = ReplyDecision(conversation_id=conversation_id, **data)
+            item = ReplyDecision(
+                shop_id=shop_id, conversation_id=conversation_id, **data
+            )
             session.add(item)
             await session.commit()
             await session.refresh(item)
             return decision_to_dict(item) or {}
 
-    async def latest_decision(self, conversation_id: str) -> dict[str, Any] | None:
+    async def latest_decision(
+        self, conversation_id: str, shop_id: str | None = None
+    ) -> dict[str, Any] | None:
         async with self._session_factory() as session:
+            filters = [ReplyDecision.conversation_id == conversation_id]
+            if shop_id is not None:
+                filters.append(ReplyDecision.shop_id == shop_id)
             item = await session.scalar(
                 select(ReplyDecision)
-                .where(ReplyDecision.conversation_id == conversation_id)
+                .where(*filters)
                 .order_by(desc(ReplyDecision.created_at))
                 .limit(1)
             )
             return decision_to_dict(item)
 
-    async def add_event(self, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def add_event(
+        self,
+        event_type: str,
+        payload: dict[str, Any],
+        shop_id: str | None = None,
+    ) -> dict[str, Any]:
         async with self._session_factory() as session:
-            item = ConnectorEvent(event_type=event_type, payload=payload)
+            if shop_id is not None:
+                payload = {**payload, "shop_id": shop_id}
+            item = ConnectorEvent(
+                shop_id=shop_id, event_type=event_type, payload=payload
+            )
             session.add(item)
             await session.commit()
             await session.refresh(item)
@@ -827,12 +1226,17 @@ class ConsoleRepository:
                 "created_at": _iso(item.created_at),
             }
 
-    async def events_after(self, event_id: int, limit: int = 200) -> list[dict[str, Any]]:
+    async def events_after(
+        self, event_id: int, limit: int = 200, shop_id: str | None = None
+    ) -> list[dict[str, Any]]:
         async with self._session_factory() as session:
+            filters = [ConnectorEvent.id > event_id]
+            if shop_id is not None:
+                filters.append(ConnectorEvent.shop_id == shop_id)
             items: Sequence[ConnectorEvent] = (
                 await session.scalars(
                     select(ConnectorEvent)
-                    .where(ConnectorEvent.id > event_id)
+                    .where(*filters)
                     .order_by(ConnectorEvent.id)
                     .limit(limit)
                 )
@@ -847,21 +1251,279 @@ class ConsoleRepository:
                 for item in items
             ]
 
-    async def latest_event_id(self) -> int:
+    async def latest_event_id(self, shop_id: str | None = None) -> int:
         async with self._session_factory() as session:
-            value = await session.scalar(select(func.max(ConnectorEvent.id)))
+            statement = select(func.max(ConnectorEvent.id))
+            if shop_id is not None:
+                statement = statement.where(ConnectorEvent.shop_id == shop_id)
+            value = await session.scalar(statement)
             return int(value or 0)
 
-    async def get_message_asset(self, asset_id: str) -> dict[str, Any] | None:
+    async def get_message_asset(
+        self, asset_id: str, shop_id: str | None = None
+    ) -> dict[str, Any] | None:
         async with self._session_factory() as session:
             item = await session.get(MessageAsset, asset_id)
             if item is None or not item.storage_key:
                 return None
+            if shop_id is not None:
+                message = await session.get(Message, item.message_id)
+                if message is None or message.shop_id != shop_id:
+                    return None
             return {
                 "id": item.id,
                 "storage_key": item.storage_key,
                 "mime_type": item.mime_type or "application/octet-stream",
                 "sha256": item.sha256,
+            }
+
+    async def get_customer_note(
+        self, shop_id: str, customer_id: str
+    ) -> dict[str, Any] | None:
+        async with self._session_factory() as session:
+            customer = await session.get(Customer, customer_id)
+            if customer is None or customer.shop_id != shop_id:
+                raise LookupError("顾客不存在")
+            return note_to_dict(await session.get(CustomerNote, customer_id))
+
+    async def update_customer_note(
+        self,
+        shop_id: str,
+        customer_id: str,
+        *,
+        content: str,
+        tags: list[str],
+        pinned: bool,
+    ) -> dict[str, Any]:
+        async with self._session_factory() as session:
+            customer = await session.get(Customer, customer_id)
+            if customer is None or customer.shop_id != shop_id:
+                raise LookupError("顾客不存在")
+            item = await session.get(CustomerNote, customer_id)
+            if item is None:
+                item = CustomerNote(customer_id=customer_id, shop_id=shop_id)
+                session.add(item)
+            item.content = content[:4000]
+            item.tags = list(dict.fromkeys(tag.strip()[:40] for tag in tags if tag.strip()))[:20]
+            item.pinned = pinned
+            item.updated_at = datetime.now(timezone.utc)
+            await session.commit()
+            await session.refresh(item)
+            return note_to_dict(item) or {}
+
+    async def record_knowledge_gap(
+        self,
+        shop_id: str,
+        *,
+        product_id: str | None,
+        normalized_question: str,
+        example_question: str,
+        reason_code: str,
+    ) -> dict[str, Any]:
+        normalized_question = normalized_question.strip().lower()[:500]
+        if not normalized_question:
+            raise ValueError("规范化问题不能为空")
+        product_key = (product_id or "").strip()[:64]
+        async with self._session_factory() as session:
+            item = await session.scalar(
+                select(KnowledgeGap).where(
+                    KnowledgeGap.shop_id == shop_id,
+                    KnowledgeGap.product_id == product_key,
+                    KnowledgeGap.normalized_question == normalized_question,
+                    KnowledgeGap.reason_code == reason_code,
+                )
+            )
+            now = datetime.now(timezone.utc)
+            if item is None:
+                item = KnowledgeGap(
+                    shop_id=shop_id,
+                    product_id=product_key,
+                    normalized_question=normalized_question,
+                    example_question=example_question[:4000],
+                    reason_code=reason_code[:64],
+                    occurrences=1,
+                    status="open",
+                    first_seen_at=now,
+                    last_seen_at=now,
+                )
+                session.add(item)
+            else:
+                item.occurrences += 1
+                item.example_question = example_question[:4000]
+                item.last_seen_at = now
+                if item.status == "resolved":
+                    item.status = "open"
+            await session.commit()
+            await session.refresh(item)
+            return knowledge_gap_to_dict(item)
+
+    async def list_knowledge_gaps(
+        self, shop_id: str, *, status: str | None = None, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        statement = select(KnowledgeGap).where(KnowledgeGap.shop_id == shop_id)
+        if status:
+            statement = statement.where(KnowledgeGap.status == status)
+        statement = statement.order_by(
+            desc(KnowledgeGap.occurrences), desc(KnowledgeGap.last_seen_at)
+        ).limit(limit)
+        async with self._session_factory() as session:
+            return [
+                knowledge_gap_to_dict(item)
+                for item in (await session.scalars(statement)).all()
+            ]
+
+    async def update_knowledge_gap(
+        self,
+        shop_id: str,
+        gap_id: str,
+        *,
+        status: str,
+        candidate_answer: str | None = None,
+        linked_qa_code: str | None = None,
+    ) -> dict[str, Any]:
+        if status not in {"open", "draft", "resolved", "dismissed"}:
+            raise ValueError("无效知识缺口状态")
+        async with self._session_factory() as session:
+            item = await session.get(KnowledgeGap, gap_id)
+            if item is None or item.shop_id != shop_id:
+                raise LookupError("知识缺口不存在")
+            item.status = status
+            item.candidate_answer = candidate_answer
+            item.linked_qa_code = linked_qa_code
+            await session.commit()
+            await session.refresh(item)
+            return knowledge_gap_to_dict(item)
+
+    async def create_knowledge_gap_qa_draft(
+        self,
+        shop_id: str,
+        gap_id: str,
+        *,
+        standard_answer: str,
+    ) -> dict[str, Any]:
+        """将缺口转换为默认不可检索、不可自动发送的 QA 草稿。"""
+        standard_answer = standard_answer.strip()
+        if not standard_answer:
+            raise ValueError("标准答案不能为空")
+        async with self._session_factory() as session:
+            gap = await session.get(KnowledgeGap, gap_id)
+            if gap is None or gap.shop_id != shop_id:
+                raise LookupError("知识缺口不存在")
+            if gap.status in {"resolved", "dismissed"}:
+                raise ValueError("已关闭的知识缺口不能转换为草稿")
+
+            qa_code = gap.linked_qa_code or f"KG-{gap.id}"
+            existing = await session.scalar(
+                select(QAKnowledge).where(QAKnowledge.qa_code == qa_code)
+            )
+            saved_answer = standard_answer[:4000]
+            if existing is None:
+                session.add(
+                    QAKnowledge(
+                        qa_code=qa_code,
+                        product_code=(gap.product_id[:50] or None),
+                        standard_question=gap.normalized_question,
+                        standard_answer=saved_answer,
+                        similar_questions=[gap.example_question],
+                        service_stage="general",
+                        risk_level="low",
+                        retrieval_enabled=False,
+                        auto_reply_eligible=False,
+                        human_required=False,
+                        status="draft",
+                        review_status="pending_validation",
+                        source=f"knowledge_gap:{gap.id}",
+                        created_by="console",
+                    )
+                )
+            else:
+                saved_answer = existing.standard_answer
+            gap.status = "draft"
+            gap.candidate_answer = saved_answer
+            gap.linked_qa_code = qa_code
+            await session.commit()
+            await session.refresh(gap)
+            return knowledge_gap_to_dict(gap)
+
+    async def shop_stats(
+        self, shop_id: str, *, since: datetime
+    ) -> dict[str, Any]:
+        async with self._session_factory() as session:
+            inbound_conversations = select(Message.conversation_id).where(
+                Message.shop_id == shop_id,
+                Message.direction == "inbound",
+                Message.is_backfill.is_(False),
+                Message.occurred_at >= since,
+            ).distinct()
+            consultation_count = int(
+                await session.scalar(
+                    select(func.count()).select_from(inbound_conversations.subquery())
+                )
+                or 0
+            )
+            ai_replies = int(
+                await session.scalar(
+                    select(func.count(OutboundJob.id)).where(
+                        OutboundJob.shop_id == shop_id,
+                        OutboundJob.source == "auto",
+                        OutboundJob.status == "sent",
+                        OutboundJob.sent_at >= since,
+                    )
+                )
+                or 0
+            )
+            handoff_count = int(
+                await session.scalar(
+                    select(func.count(func.distinct(ReplyDecision.conversation_id))).where(
+                        ReplyDecision.shop_id == shop_id,
+                        ReplyDecision.action == "handoff",
+                        ReplyDecision.created_at >= since,
+                    )
+                )
+                or 0
+            )
+            gap_count = int(
+                await session.scalar(
+                    select(func.count(KnowledgeGap.id)).where(
+                        KnowledgeGap.shop_id == shop_id,
+                        KnowledgeGap.last_seen_at >= since,
+                    )
+                )
+                or 0
+            )
+            sent_jobs = list(
+                await session.scalars(
+                    select(OutboundJob)
+                    .where(
+                        OutboundJob.shop_id == shop_id,
+                        OutboundJob.status == "sent",
+                        OutboundJob.sent_at >= since,
+                    )
+                    .order_by(OutboundJob.conversation_id, OutboundJob.sent_at)
+                )
+            )
+            first_replies: dict[str, OutboundJob] = {}
+            for job in sent_jobs:
+                first_replies.setdefault(job.conversation_id, job)
+            compliant = sum(
+                1
+                for job in first_replies.values()
+                if job.sent_at is not None
+                and job.response_deadline_at is not None
+                and _aware_utc(job.sent_at) <= _aware_utc(job.response_deadline_at)
+            )
+            return {
+                "consultation_conversations": consultation_count,
+                "ai_replies": ai_replies,
+                "handoff_rate": handoff_count / consultation_count
+                if consultation_count
+                else 0.0,
+                "knowledge_gap_rate": gap_count / consultation_count
+                if consultation_count
+                else 0.0,
+                "sla_compliance_rate": compliant / consultation_count
+                if consultation_count
+                else 0.0,
             }
 
     async def cleanup(self, message_days: int, audit_days: int) -> list[str]:

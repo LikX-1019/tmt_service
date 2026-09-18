@@ -129,6 +129,18 @@ class AutoReplyPolicy:
         qa_code = top.chunk_id if top else None
         standard_answer = str(metadata.get("answer") or "").strip() or None
 
+        if result.route == "fallback" or top is None:
+            return PolicyDecision(
+                result.route,
+                "suggest",
+                result.answer,
+                qa_code,
+                score,
+                margin,
+                "知识证据不足",
+                "fallback",
+            )
+
         faq_reason = str(result.decision_factors.get("faq_match_reason") or "")
         if faq_reason in {"ambiguous_exact_match", "missing_product_context"}:
             return PolicyDecision(
@@ -162,6 +174,7 @@ class AutoReplyPolicy:
                 score,
                 margin,
                 "知识条目当前无效",
+                "knowledge_inactive",
             )
 
         reason = self._risk_reason(query, metadata, conversation)
@@ -175,57 +188,121 @@ class AutoReplyPolicy:
                 reason = "标准回答命中知识库禁止表达"
         if reason:
             return PolicyDecision(
-                result.route, "suggest", result.answer, qa_code, score, margin, reason
+                result.route,
+                "suggest",
+                result.answer,
+                qa_code,
+                score,
+                margin,
+                reason,
+                (
+                    "product_context_missing"
+                    if reason == "缺少匹配的商品卡片上下文"
+                    else None
+                ),
             )
-        if result.route == "fallback" or top is None:
-            return PolicyDecision(
-                result.route, "suggest", result.answer, qa_code, score, margin, "知识证据不足"
-            )
-        if not allow_auto:
-            return PolicyDecision(
-                result.route, "suggest", result.answer, qa_code, score, margin, "自动回复未启用"
-            )
-        if not bool(metadata.get("auto_reply_eligible", False)):
-            return PolicyDecision(
-                result.route, "suggest", result.answer, qa_code, score, margin,
-                "知识未获自动发送资格", "auto_reply_ineligible",
-            )
-        if result.route == "faq" and standard_answer:
+
+        if result.route == "faq":
+            if not standard_answer:
+                return PolicyDecision(
+                    result.route,
+                    "suggest",
+                    result.answer,
+                    qa_code,
+                    score,
+                    margin,
+                    "候选缺少标准回答",
+                    "missing_standard_answer",
+                )
+            if not allow_auto:
+                return PolicyDecision(
+                    result.route,
+                    "suggest",
+                    result.answer,
+                    qa_code,
+                    score,
+                    margin,
+                    "自动回复未启用",
+                )
+            if not bool(metadata.get("auto_reply_eligible", False)):
+                return PolicyDecision(
+                    result.route,
+                    "suggest",
+                    result.answer,
+                    qa_code,
+                    score,
+                    margin,
+                    "知识未获自动发送资格",
+                    "auto_reply_ineligible",
+                )
             return PolicyDecision(
                 result.route, "auto_send", standard_answer, qa_code, score, margin, None
             )
+
         if result.route == "rag":
-            if self._rag_mode == "suggest_only":
+            reason_code: str | None = None
+            if not standard_answer:
+                reason = "候选缺少标准回答"
+                reason_code = "missing_standard_answer"
+            elif self._rag_mode == "suggest_only":
                 reason = "RAG 自动发送已关闭"
             elif self._rag_mode == "immediate":
                 if score is None or score < self._rag_score_threshold:
                     reason = "RAG top1 分数不足"
+                    reason_code = "low_rag_score"
                 elif margin is None or margin < self._rag_min_margin:
                     reason = "RAG 候选区分度不足"
-                elif not standard_answer:
-                    reason = "候选缺少标准回答"
+                    reason_code = "low_rag_margin"
                 else:
-                    return PolicyDecision(
-                        result.route,
-                        "auto_send",
-                        standard_answer,
-                        qa_code,
-                        score,
-                        margin,
-                        None,
-                    )
+                    reason = None
             elif not self._calibration.enabled:
                 reason = "RAG 校准未达到自动发送门槛"
             elif score is None or score < self._calibration.score_threshold:
                 reason = "RAG top1 分数不足"
+                reason_code = "low_rag_score"
             elif margin is None or margin < self._calibration.margin_threshold:
                 reason = "RAG 候选区分度不足"
-            elif not standard_answer:
-                reason = "候选缺少标准回答"
+                reason_code = "low_rag_margin"
             else:
+                reason = None
+            if reason is not None:
                 return PolicyDecision(
-                    result.route, "auto_send", standard_answer, qa_code, score, margin, None
+                    result.route,
+                    "suggest",
+                    result.answer,
+                    qa_code,
+                    score,
+                    margin,
+                    reason,
+                    reason_code,
                 )
+            if not allow_auto:
+                return PolicyDecision(
+                    result.route,
+                    "suggest",
+                    result.answer,
+                    qa_code,
+                    score,
+                    margin,
+                    "自动回复未启用",
+                )
+            if not bool(metadata.get("auto_reply_eligible", False)):
+                return PolicyDecision(
+                    result.route,
+                    "suggest",
+                    result.answer,
+                    qa_code,
+                    score,
+                    margin,
+                    "知识未获自动发送资格",
+                    "auto_reply_ineligible",
+                )
+            return PolicyDecision(
+                result.route, "auto_send", standard_answer, qa_code, score, margin, None
+            )
+
+        if not allow_auto:
+            reason = "自动回复未启用"
         return PolicyDecision(
             result.route, "suggest", result.answer, qa_code, score, margin, reason
         )

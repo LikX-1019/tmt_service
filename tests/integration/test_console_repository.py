@@ -202,6 +202,22 @@ async def test_backfill_does_not_increment_unread_and_opening_clears_live_unread
 
 
 @pytest.mark.asyncio
+async def test_operator_can_clear_response_timer_without_changing_reception_state(
+    repository: ConsoleRepository,
+) -> None:
+    shop = await repository.ensure_shop("测试店铺")
+    conversation, _, _ = await repository.ingest_message(shop["id"], message_payload())
+
+    cleared = await repository.clear_conversation_response_timer(conversation["id"])
+
+    assert cleared["response_started_at"] is None
+    assert cleared["response_deadline_at"] is None
+    assert cleared["state"] == conversation["state"]
+    assert cleared["auto_reply_enabled"] == conversation["auto_reply_enabled"]
+    assert cleared["unread_count"] == conversation["unread_count"]
+
+
+@pytest.mark.asyncio
 async def test_live_outbound_clears_timer_but_backfill_outbound_does_not(
     repository: ConsoleRepository,
 ) -> None:

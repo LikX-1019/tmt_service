@@ -107,8 +107,18 @@ def test_safe_summary_does_not_expose_secrets() -> None:
         _env_file=None,
         llm_api_key=SecretStr("top-secret"),
         mysql_password=SecretStr("db-secret"),
+        product_api_bearer_token=SecretStr("product-secret"),
     )
 
     summary = repr(settings.safe_summary())
     assert "top-secret" not in summary
     assert "db-secret" not in summary
+    assert "product-secret" not in summary
+
+
+def test_product_api_settings_have_safe_defaults() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.product_api_base_url is None
+    assert settings.product_api_timeout_seconds == 8
+    assert settings.product_auto_reply_min_confidence == 0.95

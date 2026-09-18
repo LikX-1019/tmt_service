@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import httpx
 import pytest
 
-from app.api.dependencies import get_console_runtime
+from app.api.dependencies import get_console_runtime, get_shop_runtime_manager
 from app.api.v1.console import events
 from app.services.event_broker import EventBroker
 from main import app
@@ -42,6 +42,10 @@ class FakeRuntime:
             },
             "updated_at": None,
         }
+        self.handoff = {
+            "reply_template": "您好，您反馈的售后问题已为您转接人工客服处理，请您稍候。",
+            "updated_at": None,
+        }
 
     async def ensure_initialized(self):
         return None
@@ -63,6 +67,13 @@ class FakeRuntime:
         assert conversation_id == "c1"
         item = (await self.list_conversations())[0]
         item["unread_count"] = 0
+        return item
+
+    async def clear_conversation_response_timer(self, conversation_id):
+        assert conversation_id == "c1"
+        item = (await self.list_conversations())[0]
+        item["response_started_at"] = None
+        item["response_deadline_at"] = None
         return item
 
     async def reply(self, conversation_id, *, content, client_request_id):
@@ -90,6 +101,38 @@ class FakeRuntime:
             "updated_at": NOW,
         }
         return self.greeting
+
+    async def handoff_automation(self):
+        return self.handoff
+
+    async def set_handoff_automation(self, reply_template):
+        self.handoff = {"reply_template": reply_template, "updated_at": NOW}
+        return self.handoff
+
+
+class FakeShopRuntime:
+    async def create_knowledge_gap_qa_draft(self, gap_id, *, standard_answer):
+        assert gap_id == "gap-1"
+        return {
+            "id": gap_id,
+            "shop_id": "shop-1",
+            "product_id": "sku-1",
+            "normalized_question": "怎么使用",
+            "example_question": "这个怎么使用？",
+            "reason_code": "fallback",
+            "occurrences": 2,
+            "status": "draft",
+            "candidate_answer": standard_answer,
+            "linked_qa_code": "KG-gap-1",
+            "first_seen_at": NOW,
+            "last_seen_at": NOW,
+        }
+
+
+class FakeShopManager:
+    async def get_runtime(self, shop_id):
+        assert shop_id == "shop-1"
+        return FakeShopRuntime()
 
 
 @pytest.fixture
@@ -160,11 +203,36 @@ async def test_greeting_automation_config_validation_and_update(fake_runtime) ->
 
 
 @pytest.mark.asyncio
+async def test_handoff_automation_config_can_be_updated(fake_runtime) -> None:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        current = await client.get("/api/v1/automation/handoff")
+        updated = await client.put(
+            "/api/v1/automation/handoff",
+            json={"reply_template": "售后问题已转人工，请稍候。"},
+        )
+        invalid = await client.put(
+            "/api/v1/automation/handoff", json={"reply_template": "   "}
+        )
+    assert current.status_code == 200
+    assert updated.json()["data"]["reply_template"] == "售后问题已转人工，请稍候。"
+    assert invalid.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_opened_conversation_can_be_marked_read(fake_runtime) -> None:
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/api/v1/conversations/c1/read")
     assert response.status_code == 200
     assert response.json()["data"]["unread_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_conversation_response_timer_can_be_cleared(fake_runtime) -> None:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.delete("/api/v1/conversations/c1/response-timer")
+    assert response.status_code == 200
+    assert response.json()["data"]["response_started_at"] is None
+    assert response.json()["data"]["response_deadline_at"] is None
 
 
 @pytest.mark.asyncio
@@ -174,3 +242,22 @@ async def test_sse_replays_from_last_event_id(fake_runtime) -> None:
     assert "id: 5" in first
     assert "event: message.created" in first
     await response.body_iterator.aclose()
+
+
+@pytest.mark.asyncio
+async def test_knowledge_gap_can_be_converted_to_safe_qa_draft() -> None:
+    app.dependency_overrides[get_shop_runtime_manager] = lambda: FakeShopManager()
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/v1/shops/shop-1/knowledge-gaps/gap-1/qa-draft",
+                json={"standard_answer": " 请按说明书使用。 "},
+            )
+    finally:
+        app.dependency_overrides.pop(get_shop_runtime_manager, None)
+
+    assert response.status_code == 201
+    assert response.json()["data"]["status"] == "draft"
+    assert response.json()["data"]["candidate_answer"] == "请按说明书使用。"

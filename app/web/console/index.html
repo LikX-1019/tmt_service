@@ -5,34 +5,38 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>拼多多智能客服工作台</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/assets/console/app.css?v=20260917-5">
+  <link rel="stylesheet" href="/assets/console/app.css?v=20260918-4">
 </head>
 <body>
-  <main id="shopWorkspace" class="shop-workspace hidden">
-    <header><span class="shop-workspace-mark">店</span><div><strong>店铺中心</strong><small>多店铺接待入口</small></div></header>
-    <section class="shop-workspace-list">
-      <button class="shop-workspace-item active" type="button">
-        <span id="shopAvatar" class="shop-workspace-avatar">拼</span>
-        <span class="shop-workspace-copy"><b id="shopName">拼多多店铺</b><small id="shopStatus">正在连接</small></span>
-        <em id="shopPendingCount">0</em>
-      </button>
-      <button class="shop-workspace-add" type="button" disabled>＋ 接入新店铺</button>
-    </section>
-    <footer><span>当前版本支持 1 家店铺</span><small>后续店铺将在这里切换</small></footer>
-  </main>
   <header class="topbar">
     <div class="brand">
       <span class="brand-mark">客</span>
-      <div><strong>智能客服工作台</strong><small>拼多多 · 单店本地版</small></div>
+      <div><strong>智能客服中台</strong><small id="brandContext">多店铺本地版</small></div>
     </div>
-    <div class="top-actions">
+    <div id="workspaceActions" class="top-actions hidden">
+      <button id="overviewButton" class="icon-button top-icon" title="返回店铺总览" aria-label="返回店铺总览">←</button>
+      <select id="shopSwitcher" class="shop-switcher" aria-label="切换店铺"></select>
+      <div id="receptionMode" class="segmented" aria-label="接待模式">
+        <button type="button" data-mode="assist">人机协同</button>
+        <button type="button" data-mode="guarded_auto">受控自动</button>
+      </div>
       <div id="connectorPill" class="status-pill stopped"><i></i><span>连接器已停止</span></div>
+      <button id="focusButton" class="icon-button top-icon" title="显示拼多多窗口" aria-label="显示拼多多窗口">↗</button>
       <button id="connectorButton" class="button secondary">打开登录窗口</button>
       <label class="switch-row"><span>全局自动接待</span><input id="globalAutomation" type="checkbox"><i></i></label>
     </div>
   </header>
 
-  <main class="workspace">
+  <main id="shopOverview" class="shop-overview">
+    <div class="overview-head">
+      <div><h1>店铺总览</h1><p>独立窗口、独立登录态与独立接待队列</p></div>
+      <button id="addShopButton" class="button primary">添加店铺</button>
+    </div>
+    <div id="overviewMetrics" class="overview-metrics"></div>
+    <div id="shopList" class="shop-table"><div class="empty compact">正在读取店铺…</div></div>
+  </main>
+
+  <main id="shopWorkspace" class="workspace hidden">
     <aside class="conversation-panel">
       <div class="panel-head">
         <div><h1>顾客会话</h1><span id="conversationCount">0 个会话</span></div>
@@ -79,6 +83,18 @@
         <div id="decisionContent" class="decision-empty">系统建议会显示在这里。自动发送只会使用已审核的标准答案。</div>
         <button id="useSuggestion" class="button secondary full hidden">采用建议</button>
       </section>
+      <section class="detail-card customer-note-card">
+        <div class="card-title"><span>顾客备忘录</span><em id="noteUpdatedAt">未选择</em></div>
+        <form id="customerNoteForm">
+          <textarea id="customerNote" class="greeting-reply" maxlength="4000" placeholder="仅供人工查看，不会发送给模型"></textarea>
+          <input id="customerTags" class="note-tags-input" maxlength="400" placeholder="标签，用逗号分隔">
+          <div class="greeting-actions"><button id="customerNoteSave" class="button primary" type="submit">保存备注</button></div>
+        </form>
+      </section>
+      <section class="detail-card knowledge-gap-card">
+        <div class="card-title"><span>知识缺口</span><em id="gapCount">0 条</em></div>
+        <div id="knowledgeGapList" class="knowledge-gap-list"><div class="decision-empty">当前店铺暂无待处理缺口</div></div>
+      </section>
       <section class="detail-card greeting-card">
         <div class="card-title"><span>问候自动回复</span><em id="greetingUpdatedAt">未读取</em></div>
         <form id="greetingForm" class="greeting-form">
@@ -93,6 +109,13 @@
           </div>
         </form>
       </section>
+      <section class="detail-card handoff-card">
+        <div class="card-title"><span>售后转人工</span><em id="handoffUpdatedAt">未读取</em></div>
+        <form id="handoffForm">
+          <label class="greeting-reply-line"><span>售后、退款、退货、换货与投诉会立即转人工，并发送以下说明</span><textarea id="handoffReply" class="greeting-reply" maxlength="400"></textarea></label>
+          <div class="greeting-actions"><button id="handoffSave" class="button primary" type="submit">保存话术</button></div>
+        </form>
+      </section>
       <section class="detail-card controls-card">
         <div class="card-title"><span>会话控制</span></div>
         <label class="control-line"><span><b>该会话自动接待</b><small id="conversationModeNote">选择会话后设置接待方式</small></span><input id="conversationAutomation" type="checkbox" disabled></label>
@@ -100,7 +123,17 @@
       </section>
     </aside>
   </main>
+  <div id="conversationContextMenu" class="conversation-context-menu hidden" role="menu" aria-label="会话操作">
+    <div class="context-menu-summary">
+      <strong id="contextMenuName"></strong>
+      <span id="contextMenuTime"></span>
+      <small id="contextMenuStatus"></small>
+    </div>
+    <button id="contextMenuManual" type="button" role="menuitem">转人工接待</button>
+    <button id="contextMenuAuto" type="button" role="menuitem">恢复自动接待</button>
+    <button id="contextMenuClearTimer" type="button" role="menuitem">清除响应计时</button>
+  </div>
   <div id="toast" class="toast" role="status"></div>
-  <script type="module" src="/assets/console/app.js?v=20260917-5"></script>
+  <script type="module" src="/assets/console/app.js?v=20260918-4"></script>
 </body>
 </html>

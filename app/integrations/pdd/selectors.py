@@ -372,3 +372,36 @@ LATEST_OUTBOUND_TEXT_SCRIPT = r"""
   };
 }
 """
+
+
+SHOP_IDENTITY_SCRIPT = r"""
+() => {
+  const visible = node => {
+    if (!(node instanceof HTMLElement)) return false;
+    const style = window.getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+  };
+  const roots = Array.from(document.querySelectorAll(
+    '[data-shop-id], [data-mall-id], [data-merchant-id], [data-store-id], '
+    + '[class*="merchant"], [class*="shop"], [class*="mall"], [class*="store"]'
+  )).filter(visible);
+  const idPattern = /(?:shop|mall|merchant|store)[-_ ]?(?:id)?[:：\s#]*([A-Za-z0-9_-]{4,191})/i;
+  for (const node of roots) {
+    const id = node.getAttribute('data-shop-id')
+      || node.getAttribute('data-mall-id')
+      || node.getAttribute('data-merchant-id')
+      || node.getAttribute('data-store-id')
+      || (node.textContent || '').match(idPattern)?.[1];
+    if (!id) continue;
+    const nameNode = node.querySelector('[class*="name"], [title]');
+    const name = (nameNode?.getAttribute('title') || nameNode?.textContent || node.getAttribute('title') || '').trim();
+    if (name && name.length <= 255) return {platform_shop_id: String(id), name};
+  }
+  const bodyText = (document.body?.innerText || '').slice(0, 20000);
+  const id = bodyText.match(idPattern)?.[1];
+  const title = (document.querySelector('header [title], [class*="shop-name"]')?.getAttribute('title')
+    || document.querySelector('header [class*="name"], [class*="shop-name"]')?.textContent || '').trim();
+  return id && title ? {platform_shop_id: id, name: title} : null;
+}
+"""

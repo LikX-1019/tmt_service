@@ -113,6 +113,7 @@ def test_immediate_rag_rejects_small_candidate_margin() -> None:
     ).evaluate("普通问题", ambiguous, {}, allow_auto=True)
     assert decision.action == "suggest"
     assert decision.reason == "RAG 候选区分度不足"
+    assert decision.reason_code == "low_rag_margin"
 
 
 def test_immediate_rag_respects_manual_takeover() -> None:
@@ -152,3 +153,12 @@ def test_unreviewed_or_ineligible_knowledge_never_auto_sends() -> None:
     assert AutoReplyPolicy(Calibration()).evaluate(
         "怎么使用", ineligible, {}, allow_auto=True
     ).reason_code == "auto_reply_ineligible"
+
+
+def test_fallback_is_classified_as_a_knowledge_gap() -> None:
+    fallback = QAResult(answer="需要人工补充", route="fallback")
+    decision = AutoReplyPolicy(Calibration()).evaluate(
+        "没有标准答案的问题", fallback, {}, allow_auto=False
+    )
+    assert decision.action == "suggest"
+    assert decision.reason_code == "fallback"

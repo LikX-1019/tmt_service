@@ -46,48 +46,87 @@ class QAService:
         knowledge_version: str | None = None,
         product_name: str | None = None,
     ) -> QAResult:
+        faq_result = self.match_exact(
+            query,
+            product_code=product_code,
+            service_stage=service_stage,
+            knowledge_version=knowledge_version,
+            product_name=product_name,
+        )
+        if faq_result is not None:
+            return faq_result
+        return await self.answer_rag(
+            query,
+            product_code=product_code,
+            service_stage=service_stage,
+            knowledge_version=knowledge_version,
+            product_name=product_name,
+        )
+
+    def match_exact(
+        self,
+        query: str,
+        *,
+        product_code: str | None = None,
+        service_stage: str | None = None,
+        knowledge_version: str | None = None,
+        product_name: str | None = None,
+    ) -> QAResult | None:
+        """返回唯一精确 QA 命中；调用方可在 RAG 前插入其他受控路由。"""
         started_at = perf_counter()
-        normalized_query = self._normalizer.normalize(query)
         faq_match = self._faq_matcher.resolve(
-            normalized_query,
+            self._normalizer.normalize(query),
             product_code=product_code,
             service_stage=service_stage,
             knowledge_version=knowledge_version,
             product_name=product_name,
         )
         faq = faq_match.item
-        if faq is not None:
-            result = QAResult(
-                answer=faq.answer,
-                route="faq",
-                confidence=1.0,
-                match_score=faq_match.match_score,
-                decision_factors={"faq_match_reason": "unique_exact_match"},
-                trace_documents=[
-                    RetrievalDocument(
-                        chunk_id=faq.id,
-                        content=f"问题：{faq.question}\n回答：{faq.answer}",
-                        title=faq.question,
-                        source=str(faq.metadata.get("source") or "cs_qa"),
-                        metadata={
-                            **faq.metadata,
-                            "question": faq.question,
-                            "answer": faq.answer,
-                        },
-                        rerank_score=1.0,
-                    )
-                ],
-                retrieval_counts={
-                    "dense": 0,
-                    "bm25": 0,
-                    "fusion": 0,
-                    "rerank": 0,
-                },
-            )
-            self._log_result(
-                started_at, result, faq_hit=True, query_length=len(query)
-            )
-            return result
+        if faq is None:
+            return None
+        result = QAResult(
+            answer=faq.answer,
+            route="faq",
+            confidence=1.0,
+            match_score=faq_match.match_score,
+            decision_factors={"faq_match_reason": "unique_exact_match"},
+            trace_documents=[
+                RetrievalDocument(
+                    chunk_id=faq.id,
+                    content=f"问题：{faq.question}\n回答：{faq.answer}",
+                    title=faq.question,
+                    source=str(faq.metadata.get("source") or "cs_qa"),
+                    metadata={
+                        **faq.metadata,
+                        "question": faq.question,
+                        "answer": faq.answer,
+                    },
+                    rerank_score=1.0,
+                )
+            ],
+            retrieval_counts={"dense": 0, "bm25": 0, "fusion": 0, "rerank": 0},
+        )
+        self._log_result(started_at, result, faq_hit=True, query_length=len(query))
+        return result
+
+    async def answer_rag(
+        self,
+        query: str,
+        *,
+        product_code: str | None = None,
+        service_stage: str | None = None,
+        knowledge_version: str | None = None,
+        product_name: str | None = None,
+    ) -> QAResult:
+        """跳过精确 FAQ，使用既有检索和证据门槛生成通用答案。"""
+        started_at = perf_counter()
+        faq_match = self._faq_matcher.resolve(
+            self._normalizer.normalize(query),
+            product_code=product_code,
+            service_stage=service_stage,
+            knowledge_version=knowledge_version,
+            product_name=product_name,
+        )
 
         documents = await self._retriever.retrieve(query.strip())
         reranked = await self._reranker.rerank(query.strip(), documents)

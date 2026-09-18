@@ -33,6 +33,59 @@ services:
     networks:
       - customer-service-network
 
+  product-postgres:
+    image: postgres:17-alpine
+    container_name: ${COMPOSE_PROJECT_NAME:-customer-service}-product-postgres
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ}
+      POSTGRES_DB: ${PRODUCT_POSTGRES_DB}
+      POSTGRES_USER: ${PRODUCT_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${PRODUCT_POSTGRES_PASSWORD}
+    ports:
+      - "127.0.0.1:${PRODUCT_POSTGRES_PORT}:5432"
+    volumes:
+      - ./data/docker/product-postgres:/var/lib/postgresql/data
+      - ./docker/product-postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - customer-service-network
+
+  commodity-management:
+    build:
+      context: ./commodity_management
+    container_name: ${COMPOSE_PROJECT_NAME:-customer-service}-commodity-management
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ}
+      DATABASE_HOST: product-postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${PRODUCT_POSTGRES_DB}
+      DATABASE_USER: ${PRODUCT_POSTGRES_USER}
+      DATABASE_PASSWORD: ${PRODUCT_POSTGRES_PASSWORD}
+      COMMODITY_ADMIN_USERNAME: ${COMMODITY_ADMIN_USERNAME}
+      COMMODITY_ADMIN_PASSWORD: ${COMMODITY_ADMIN_PASSWORD}
+      COMMODITY_SESSION_SECRET: ${COMMODITY_SESSION_SECRET}
+      PRODUCT_API_BEARER_TOKEN: ${PRODUCT_API_BEARER_TOKEN}
+    ports:
+      - "${COMMODITY_MANAGEMENT_BIND:-0.0.0.0}:${COMMODITY_MANAGEMENT_PORT}:8080"
+    depends_on:
+      product-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - customer-service-network
+
   etcd:
     image: quay.io/coreos/etcd:v3.5.18
     container_name: ${COMPOSE_PROJECT_NAME:-customer-service}-etcd

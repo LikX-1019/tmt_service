@@ -21,6 +21,8 @@ SUPPORTED_AGENT_TYPES = frozenset(
     {
         "guard",
         "intent",
+        "routing",
+        "product",
         "rag",
         "query_rewrite",
         "response",

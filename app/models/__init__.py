@@ -6,12 +6,15 @@ from app.models.conversation import (
     ConnectorEvent,
     Conversation,
     Customer,
+    CustomerNote,
+    KnowledgeGap,
     Message,
     MessageAsset,
     OutboundJob,
     ReplyDecision,
     Shop,
     ShopGreetingConfig,
+    ShopHandoffConfig,
 )
 from app.models.knowledge import QAKnowledge
 
@@ -21,6 +24,8 @@ __all__ = [
     "ConnectorEvent",
     "Conversation",
     "Customer",
+    "CustomerNote",
+    "KnowledgeGap",
     "Message",
     "MessageAsset",
     "OutboundJob",
@@ -28,4 +33,5 @@ __all__ = [
     "QAKnowledge",
     "Shop",
     "ShopGreetingConfig",
+    "ShopHandoffConfig",
 ]

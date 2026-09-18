@@ -1,5 +1,7 @@
 """FastAPI 依赖提供模块，集中管理接口所需服务实例。"""
 
+from __future__ import annotations
+
 import asyncio
 from functools import lru_cache
 
@@ -17,6 +19,7 @@ from app.rag.retrieval.hybrid_retriever import HybridRetriever
 from app.rag.retrieval.reranker import BGEReranker
 from app.services.chat_service import ChatService
 from app.services.console_runtime import ConsoleRuntime
+from app.services.shop_runtime_manager import ShopRuntimeManager
 
 
 _qa_service: QAService | None = None
@@ -56,6 +59,41 @@ async def get_qa_service() -> QAService:
     return _qa_service
 
 
-def get_console_runtime(request: Request) -> ConsoleRuntime:
-    """返回由 FastAPI 生命周期持有的控制台运行时。"""
-    return request.app.state.console_runtime
+def get_shop_runtime_manager(
+    request: Request,
+) -> ShopRuntimeManager | _LegacyRuntimeManager:
+    """返回应用生命周期持有的多店运行时管理器。"""
+    manager = getattr(request.app.state, "shop_runtime_manager", None)
+    if manager is not None:
+        return manager
+    # 测试和旧嵌入方可继续注入单店 runtime。
+    runtime = getattr(request.app.state, "console_runtime", None)
+    if runtime is not None:
+        return _LegacyRuntimeManager(runtime)
+    raise RuntimeError("店铺运行时尚未初始化")
+
+
+async def get_console_runtime(request: Request) -> ConsoleRuntime:
+    """旧无作用域接口：只有唯一 active 店铺时才允许推断。"""
+    manager = get_shop_runtime_manager(request)
+    if isinstance(manager, _LegacyRuntimeManager):
+        return manager.runtime
+    return await manager.legacy_runtime()
+
+
+class _LegacyRuntimeManager:
+    """仅供现有测试覆盖旧依赖注入方式。"""
+
+    def __init__(self, runtime: ConsoleRuntime) -> None:
+        self.runtime = runtime
+
+    @property
+    def repository(self):
+        return self.runtime.repository
+
+    @property
+    def broker(self):
+        return self.runtime.broker
+
+    async def initialize(self) -> None:
+        await self.runtime.ensure_initialized()

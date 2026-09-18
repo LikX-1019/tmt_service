@@ -40,46 +40,62 @@ def upgrade() -> None:
     )
     op.create_index("ix_agent_accounts_shop", "agent_accounts", ["shop_id", "account_type"])
 
-    op.add_column("conversations", sa.Column("customer_id", sa.String(36)))
-    op.create_foreign_key(
-        "fk_conversations_customer",
-        "conversations",
-        "customers",
-        ["customer_id"],
-        ["id"],
-        ondelete="SET NULL",
-    )
-    op.create_index("ix_conversations_customer_id", "conversations", ["customer_id"], unique=True)
+    with op.batch_alter_table("conversations") as batch:
+        batch.add_column(sa.Column("customer_id", sa.String(36)))
+        batch.create_foreign_key(
+            "fk_conversations_customer",
+            "customers",
+            ["customer_id"],
+            ["id"],
+            ondelete="SET NULL",
+        )
+        batch.create_index(
+            "ix_conversations_customer_id", ["customer_id"], unique=True
+        )
 
-    op.add_column("messages", sa.Column("shop_id", sa.String(36)))
-    op.add_column("messages", sa.Column("customer_id", sa.String(36)))
-    op.add_column("messages", sa.Column("message_date", sa.Date()))
-    op.add_column("messages", sa.Column("sender_type", sa.String(32)))
-    op.add_column("messages", sa.Column("sender_account_id", sa.String(36)))
-    op.add_column("messages", sa.Column("sender_display_name", sa.String(255)))
-    op.add_column(
-        "messages",
-        sa.Column(
-            "assignment_verified",
-            sa.Boolean(),
-            nullable=False,
-            server_default=sa.false(),
-        ),
-    )
-    op.create_foreign_key("fk_messages_shop", "messages", "shops", ["shop_id"], ["id"], ondelete="CASCADE")
-    op.create_foreign_key("fk_messages_customer", "messages", "customers", ["customer_id"], ["id"], ondelete="SET NULL")
-    op.create_foreign_key("fk_messages_agent", "messages", "agent_accounts", ["sender_account_id"], ["id"], ondelete="SET NULL")
+    with op.batch_alter_table("messages") as batch:
+        batch.add_column(sa.Column("shop_id", sa.String(36)))
+        batch.add_column(sa.Column("customer_id", sa.String(36)))
+        batch.add_column(sa.Column("message_date", sa.Date()))
+        batch.add_column(sa.Column("sender_type", sa.String(32)))
+        batch.add_column(sa.Column("sender_account_id", sa.String(36)))
+        batch.add_column(sa.Column("sender_display_name", sa.String(255)))
+        batch.add_column(
+            sa.Column(
+                "assignment_verified",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.false(),
+            )
+        )
+        batch.create_foreign_key(
+            "fk_messages_shop", "shops", ["shop_id"], ["id"], ondelete="CASCADE"
+        )
+        batch.create_foreign_key(
+            "fk_messages_customer",
+            "customers",
+            ["customer_id"],
+            ["id"],
+            ondelete="SET NULL",
+        )
+        batch.create_foreign_key(
+            "fk_messages_agent",
+            "agent_accounts",
+            ["sender_account_id"],
+            ["id"],
+            ondelete="SET NULL",
+        )
 
-    op.add_column("outbound_jobs", sa.Column("responder_account_id", sa.String(36)))
-    op.add_column("outbound_jobs", sa.Column("responder_display_name", sa.String(255)))
-    op.create_foreign_key(
-        "fk_outbound_responder",
-        "outbound_jobs",
-        "agent_accounts",
-        ["responder_account_id"],
-        ["id"],
-        ondelete="SET NULL",
-    )
+    with op.batch_alter_table("outbound_jobs") as batch:
+        batch.add_column(sa.Column("responder_account_id", sa.String(36)))
+        batch.add_column(sa.Column("responder_display_name", sa.String(255)))
+        batch.create_foreign_key(
+            "fk_outbound_responder",
+            "agent_accounts",
+            ["responder_account_id"],
+            ["id"],
+            ondelete="SET NULL",
+        )
 
     bind = op.get_bind()
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -111,42 +127,57 @@ def upgrade() -> None:
             {"customer_id": customer_id, "id": row["id"]},
         )
 
-    bind.execute(
-        sa.text(
-            "UPDATE messages m JOIN conversations c ON c.id=m.conversation_id "
-            "SET m.shop_id=c.shop_id, m.customer_id=c.customer_id, "
-            "m.message_date=DATE(DATE_ADD(m.occurred_at, INTERVAL 8 HOUR)), "
-            "m.sender_type=CASE WHEN m.direction='inbound' THEN 'customer' ELSE 'agent' END, "
-            "m.assignment_verified=0"
+    if bind.dialect.name == "sqlite":
+        bind.execute(
+            sa.text(
+                "UPDATE messages SET "
+                "shop_id=(SELECT c.shop_id FROM conversations c WHERE c.id=messages.conversation_id), "
+                "customer_id=(SELECT c.customer_id FROM conversations c WHERE c.id=messages.conversation_id), "
+                "message_date=DATE(datetime(occurred_at, '+8 hours')), "
+                "sender_type=CASE WHEN direction='inbound' THEN 'customer' ELSE 'agent' END, "
+                "assignment_verified=0"
+            )
         )
-    )
+    else:
+        bind.execute(
+            sa.text(
+                "UPDATE messages m JOIN conversations c ON c.id=m.conversation_id "
+                "SET m.shop_id=c.shop_id, m.customer_id=c.customer_id, "
+                "m.message_date=DATE(DATE_ADD(m.occurred_at, INTERVAL 8 HOUR)), "
+                "m.sender_type=CASE WHEN m.direction='inbound' THEN 'customer' ELSE 'agent' END, "
+                "m.assignment_verified=0"
+            )
+        )
     op.create_index("ix_messages_customer_day", "messages", ["customer_id", "message_date", "occurred_at"])
     op.create_index("ix_messages_shop_day", "messages", ["shop_id", "message_date", "occurred_at"])
     op.create_index("ix_messages_agent_day", "messages", ["sender_account_id", "message_date", "occurred_at"])
 
 
 def downgrade() -> None:
-    op.drop_constraint("fk_outbound_responder", "outbound_jobs", type_="foreignkey")
-    op.drop_column("outbound_jobs", "responder_display_name")
-    op.drop_column("outbound_jobs", "responder_account_id")
+    with op.batch_alter_table("outbound_jobs") as batch:
+        batch.drop_constraint("fk_outbound_responder", type_="foreignkey")
+        batch.drop_column("responder_display_name")
+        batch.drop_column("responder_account_id")
     op.drop_index("ix_messages_agent_day", table_name="messages")
     op.drop_index("ix_messages_shop_day", table_name="messages")
     op.drop_index("ix_messages_customer_day", table_name="messages")
-    op.drop_constraint("fk_messages_agent", "messages", type_="foreignkey")
-    op.drop_constraint("fk_messages_customer", "messages", type_="foreignkey")
-    op.drop_constraint("fk_messages_shop", "messages", type_="foreignkey")
-    for column in (
-        "assignment_verified",
-        "sender_display_name",
-        "sender_account_id",
-        "sender_type",
-        "message_date",
-        "customer_id",
-        "shop_id",
-    ):
-        op.drop_column("messages", column)
-    op.drop_index("ix_conversations_customer_id", table_name="conversations")
-    op.drop_constraint("fk_conversations_customer", "conversations", type_="foreignkey")
-    op.drop_column("conversations", "customer_id")
+    with op.batch_alter_table("messages") as batch:
+        batch.drop_constraint("fk_messages_agent", type_="foreignkey")
+        batch.drop_constraint("fk_messages_customer", type_="foreignkey")
+        batch.drop_constraint("fk_messages_shop", type_="foreignkey")
+        for column in (
+            "assignment_verified",
+            "sender_display_name",
+            "sender_account_id",
+            "sender_type",
+            "message_date",
+            "customer_id",
+            "shop_id",
+        ):
+            batch.drop_column(column)
+    with op.batch_alter_table("conversations") as batch:
+        batch.drop_index("ix_conversations_customer_id")
+        batch.drop_constraint("fk_conversations_customer", type_="foreignkey")
+        batch.drop_column("customer_id")
     op.drop_table("agent_accounts")
     op.drop_table("customers")
