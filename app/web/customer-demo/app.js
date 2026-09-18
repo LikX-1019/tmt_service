@@ -152,6 +152,57 @@ class QACompatibilityTransport extends ChatTransport {
   }
 }
 
+class RulePreflightTransport extends ChatTransport {
+  constructor(innerTransport) {
+    super();
+    this.innerTransport = innerTransport;
+    this.endpoint = "/api/v1/rules/evaluate";
+  }
+
+  get mode() {
+    return `${this.innerTransport.mode}+rule-preflight`;
+  }
+
+  async send(message) {
+    const startedAt = performance.now();
+    const payload = {
+      message: message.content,
+      session_id: message.session_id,
+      customer_id: message.customer_id,
+      current_product_id: message.product_id || null,
+      service_stage: message.service_stage,
+      channel: "customer_demo",
+    };
+    const { body, requestId, latencyMs } = await this.postJson(this.endpoint, payload);
+    const data = body?.data ?? body;
+    const decision = data?.terminal_decision;
+
+    if (decision && typeof decision.fixed_reply === "string" && decision.fixed_reply) {
+      return {
+        answer: decision.fixed_reply,
+        route: typeof decision.route === "string" ? decision.route : null,
+        confidence: normalizeNumber(decision.confidence),
+        sources: [
+          {
+            chunkId: null,
+            title: `Rule: ${decision.rule_name ?? "unknown"}`,
+            source: decision.reason_code ?? null,
+            score: normalizeNumber(decision.confidence),
+          },
+        ],
+        requestId,
+        latencyMs,
+      };
+    }
+
+    const result = await this.innerTransport.send(message);
+    return {
+      ...result,
+      latencyMs: Math.round(performance.now() - startedAt),
+    };
+  }
+}
+
 class FutureRagChatTransport extends ChatTransport {
   constructor() {
     super();
@@ -257,7 +308,7 @@ function defaultDebug() {
     output_message_id: null,
     current_product_id: currentProductId() || null,
     service_stage: currentServiceStage(),
-    transport_mode: state.transportMode,
+    transport_mode: state.transport?.mode ?? state.transportMode,
     route: null,
     confidence: null,
     request_id: null,
@@ -448,10 +499,12 @@ function setSending(isSending) {
 }
 
 function createTransport() {
-  if (state.transportMode === "rag-chat") return new FutureRagChatTransport();
-  return new QACompatibilityTransport({
-    getLegacyProductCode: () => dom.legacyProductCode.value.trim(),
-  });
+  const innerTransport = state.transportMode === "rag-chat"
+    ? new FutureRagChatTransport()
+    : new QACompatibilityTransport({
+        getLegacyProductCode: () => dom.legacyProductCode.value.trim(),
+      });
+  return new RulePreflightTransport(innerTransport);
 }
 
 async function dispatchCustomerMessage(message) {
@@ -550,7 +603,7 @@ function bindEvents() {
     state.transportMode = dom.transportMode.value;
     state.transport = createTransport();
     updateDebug({
-      transport_mode: state.transportMode,
+      transport_mode: state.transport?.mode ?? state.transportMode,
       route: null,
       confidence: null,
       request_id: null,
