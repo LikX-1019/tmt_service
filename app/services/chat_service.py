@@ -14,7 +14,13 @@ from app.repositories.conversation_repository import ConversationProductReposito
 from app.repositories.product_repository import ProductRepository
 from app.rules.base import RuleContext
 from app.rules.registry import RuleRegistry, default_rule_registry
-from app.schemas.chat import ChatRequest, ChatResponse, ChatSourceView, ChatProductView
+from app.schemas.chat import (
+    ChatProductCandidateView,
+    ChatProductView,
+    ChatRequest,
+    ChatResponse,
+    ChatSourceView,
+)
 from app.services.product_resolver import ProductResolver
 from app.services.product_service import (
     ProductAnswer,
@@ -99,7 +105,34 @@ class ChatService:
             message=request.message,
             conversation_product_id=binding.product_id if binding else None,
         )
-        explicit_product = resolution.source in {"request", "message"}
+        explicit_product = resolution.source in {"request", "url", "message_id"}
+        name_query = None
+        if not explicit_product:
+            name_query = self._product_resolver.extract_name_query(
+                request.message,
+                product_intent=rule_result.requires_product,
+            )
+        if name_query is not None:
+            name_response = await self._resolve_product_name(request, name_query, rule_result)
+            if name_response is not None:
+                return name_response
+
+        if not explicit_product and self._product_resolver.has_url(request.message):
+            return ChatResponse(
+                conversation_id=request.conversation_id,
+                answer=(
+                    "无法从该链接确认商品，请提供当前系统的商品详情链接或商品名称。"
+                ),
+                source="product",
+                route=(
+                    "product_link_invalid"
+                    if self._product_resolver.has_unresolved_known_url(request.message)
+                    else "product_link_unsupported"
+                ),
+                product_resolution="none",
+                rule_name=self._matched_product_rule(rule_result),
+            )
+
         product_question = explicit_product or rule_result.requires_product
 
         if product_question and resolution.product_id is None:
@@ -120,10 +153,15 @@ class ChatService:
         try:
             product = await self._products.get_product_by_id(resolution.product_id)
         except ProductNotFoundError:
-            await self._clear_binding_if_present(request.conversation_id)
+            if resolution.source == "conversation":
+                await self._clear_binding_if_present(request.conversation_id)
             return ChatResponse(
                 conversation_id=request.conversation_id,
-                answer="未找到对应商品，请确认商品信息后重试。",
+                answer=(
+                    "未找到对应商品，请确认商品链接。"
+                    if resolution.source == "url"
+                    else "未找到对应商品，请确认商品信息后重试。"
+                ),
                 source="product",
                 route="product_not_found",
                 product_resolution=resolution.source,
@@ -179,6 +217,7 @@ class ChatService:
             route=result.route,
             product_resolution="none",
             confidence=result.confidence,
+            qa_hit=result.route != "fallback",
             sources=[
                 ChatSourceView(
                     chunk_id=source.chunk_id,
@@ -187,6 +226,80 @@ class ChatService:
                     score=source.score,
                 )
                 for source in result.sources
+            ],
+        )
+
+    async def _resolve_product_name(
+        self,
+        request: ChatRequest,
+        query: str,
+        rule_result: Any,
+    ) -> ChatResponse | None:
+        assert self._products is not None
+        try:
+            candidates = await self._products.search_products_by_name(query, limit=5)
+        except ProductLookupError as exc:
+            raise ProductServiceUnavailableError() from exc
+        if not candidates:
+            return ChatResponse(
+                conversation_id=request.conversation_id,
+                answer="没有找到对应商品，请检查商品名称后重试。",
+                source="product",
+                route="product_not_found",
+                product_resolution="none",
+                rule_name=self._matched_product_rule(rule_result),
+            )
+
+        exact = [candidate for candidate in candidates if candidate.match_type == "exact"]
+        if len(exact) == 1:
+            try:
+                product = await self._products.get_product_by_id(exact[0].id)
+            except ProductNotFoundError:
+                return ChatResponse(
+                    conversation_id=request.conversation_id,
+                    answer="没有找到对应商品，请检查商品名称后重试。",
+                    source="product",
+                    route="product_not_found",
+                    product_resolution="none",
+                    rule_name=self._matched_product_rule(rule_result),
+                )
+            except ProductLookupError as exc:
+                raise ProductServiceUnavailableError() from exc
+            await self._bind_product(request.conversation_id, product)
+            try:
+                answer = await self._product_answers.answer(
+                    request.message,
+                    product,
+                    conversation_id=request.conversation_id,
+                )
+            except AppException:
+                raise
+            except Exception as exc:
+                raise LLMInvocationError() from exc
+            return self._product_response(
+                request,
+                product,
+                answer,
+                "name_exact",
+                rule_result,
+            )
+
+        return ChatResponse(
+            conversation_id=request.conversation_id,
+            answer="找到多个可能的商品，请选择您咨询的商品。",
+            source="product_selection",
+            route="product_selection",
+            product_resolution="name_candidates",
+            rule_name=self._matched_product_rule(rule_result),
+            products=[
+                ChatProductCandidateView(
+                    id=candidate.id,
+                    name=candidate.name,
+                    summary=candidate.summary,
+                    internal_code=candidate.internal_code,
+                    specifications=candidate.specifications,
+                )
+                for candidate in candidates[:5]
             ],
         )
 

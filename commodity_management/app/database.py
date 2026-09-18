@@ -116,6 +116,55 @@ def get_published_profile(product_id: str) -> dict[str, Any] | None:
             return cursor.fetchone()
 
 
+def search_published_profiles(query: str, limit: int = 5) -> list[dict[str, Any]]:
+    """按真实 ID、名称和内部编码搜索已发布商品，精确结果优先。"""
+    normalized = query.strip()
+    if not normalized:
+        return []
+    pattern = f"%{normalized}%"
+    with pool.connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT profile.*,
+                       CASE
+                           WHEN lower(profile.id) = lower(%s)
+                             OR lower(profile.name) = lower(%s)
+                             OR lower(COALESCE(profile.internal_code, '')) = lower(%s)
+                           THEN 'exact'
+                           ELSE 'contains'
+                       END AS match_type
+                FROM product_api_profiles AS profile
+                WHERE profile.name ILIKE %s
+                   OR COALESCE(profile.internal_code, '') ILIKE %s
+                   OR profile.id ILIKE %s
+                ORDER BY
+                    CASE
+                        WHEN lower(profile.id) = lower(%s) THEN 0
+                        WHEN lower(profile.name) = lower(%s) THEN 1
+                        WHEN lower(COALESCE(profile.internal_code, '')) = lower(%s) THEN 2
+                        ELSE 3
+                    END,
+                    profile.name,
+                    profile.id
+                LIMIT %s
+                """,
+                (
+                    normalized,
+                    normalized,
+                    normalized,
+                    pattern,
+                    pattern,
+                    pattern,
+                    normalized,
+                    normalized,
+                    normalized,
+                    min(max(limit, 1), 5),
+                ),
+            )
+            return cursor.fetchall()
+
+
 def create_product(data: ProductCreate) -> dict[str, Any]:
     sql = """
         INSERT INTO products (
@@ -361,6 +410,7 @@ __all__ = [
     "list_products",
     "get_product",
     "get_published_profile",
+    "search_published_profiles",
     "create_product",
     "update_product",
     "delete_product",

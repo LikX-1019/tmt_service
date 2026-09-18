@@ -69,7 +69,7 @@ def upgrade() -> None:
         )
 
     with op.batch_alter_table("shops") as batch:
-        batch.alter_column("browser_profile_key", nullable=False)
+        batch.alter_column("browser_profile_key", existing_type=sa.String(64), nullable=False)
         batch.create_unique_constraint(
             "uq_shop_platform_id", ["platform", "platform_shop_id"]
         )

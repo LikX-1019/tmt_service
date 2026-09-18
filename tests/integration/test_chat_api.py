@@ -45,10 +45,12 @@ async def test_chat_api_returns_uniform_response() -> None:
             "source": "qa",
             "route": "stub",
             "product": None,
+            "products": [],
             "product_resolution": "none",
             "rule_name": None,
             "reason_code": None,
             "confidence": None,
+            "qa_hit": None,
             "sources": [],
         },
     }

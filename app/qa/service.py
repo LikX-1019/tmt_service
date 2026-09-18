@@ -14,10 +14,7 @@ from app.qa.normalizer import QueryNormalizer
 
 logger = logging.getLogger(__name__)
 
-FALLBACK_ANSWER = (
-    "抱歉，目前知识库中没有找到足够的信息来准确回答这个问题。"
-    "你可以提供更具体的商品名称或问题描述，我再帮你查询。"
-)
+FALLBACK_ANSWER = "目前知识库中暂无相关信息，请联系人工客服获取帮助。"
 
 
 class QAService:

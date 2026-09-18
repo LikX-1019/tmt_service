@@ -261,6 +261,18 @@ def delete_variant(sku_id: str, _username: AdminUser) -> Response:
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@app.get("/products")
+def customer_service_product_search(
+    query: str = Query(min_length=2, max_length=200),
+    limit: int = Query(default=5, ge=1, le=5),
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict[str, list[dict]]:
+    expected = f"Bearer {settings.product_api_bearer_token}"
+    if authorization is None or not secrets.compare_digest(authorization, expected):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="无效的访问令牌")
+    return {"data": database.search_published_profiles(query, limit)}
+
+
 @app.get("/products/{product_id}")
 def customer_service_product(
     product_id: str,

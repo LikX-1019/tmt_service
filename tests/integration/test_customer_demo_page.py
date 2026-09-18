@@ -95,9 +95,13 @@ async def test_customer_demo_transport_uses_qa_compatibility_and_safe_rendering(
     assert "class RulePreflightTransport" in response.text
     assert "class QACompatibilityTransport" in response.text
     assert "conversation_id: message.session_id" in response.text
+    assert 'debugConversationId: document.querySelector("#debugConversationId")' in response.text
     assert "product_id: message.product_id || null" in response.text
     assert "source: result.source" in response.text
     assert "product_resolution: result.productResolution" in response.text
+    assert "function selectProductCandidate" in response.text
+    assert "normalizeProducts(data.products)" in response.text
+    assert "qa_hit: result.qaHit" in response.text
     assert "content.textContent = message.content" in response.text
     assert "innerHTML" not in response.text
 

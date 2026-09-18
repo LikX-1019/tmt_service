@@ -10,6 +10,7 @@ from app.services.product_service import (
     ProductLookupError,
     ProductNotFoundError,
     ProductProfile,
+    ProductSearchResult,
 )
 
 
@@ -108,3 +109,47 @@ def test_product_context_builder_only_outputs_real_non_empty_fields() -> None:
     assert "规格：\n- 材质：锦纶" in context
     assert "使用方法" not in context
     assert "适合场景" not in context
+
+
+@pytest.mark.asyncio
+async def test_product_client_searches_published_profiles_with_limit() -> None:
+    seen: dict[str, str] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["query"] = request.url.query.decode()
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": "sku-1",
+                        "name": "运动护膝 标准版",
+                        "summary": "标准支撑。",
+                        "internal_code": "KNEE-STD",
+                        "specifications": {"版本": "标准版"},
+                        "match_type": "contains",
+                    }
+                ]
+            },
+        )
+
+    settings = Settings(
+        _env_file=None,
+        product_api_base_url="https://products.example.test",
+        product_api_bearer_token="secret-token",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        results = await HttpProductClient(settings, client).search_products("运动护膝", 5)
+
+    assert results == [
+        ProductSearchResult(
+            id="sku-1",
+            name="运动护膝 标准版",
+            summary="标准支撑。",
+            internal_code="KNEE-STD",
+            specifications={"版本": "标准版"},
+            match_type="contains",
+        )
+    ]
+    assert seen == {"path": "/products", "query": "query=%E8%BF%90%E5%8A%A8%E6%8A%A4%E8%86%9D&limit=5"}

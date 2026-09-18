@@ -27,6 +27,7 @@ const dom = {
   sendButton: document.querySelector("#sendButton"),
   sendState: document.querySelector("#sendState"),
   debugSessionId: document.querySelector("#debugSessionId"),
+  debugConversationId: document.querySelector("#debugConversationId"),
   debugCustomerId: document.querySelector("#debugCustomerId"),
   debugInputMessageId: document.querySelector("#debugInputMessageId"),
   debugOutputMessageId: document.querySelector("#debugOutputMessageId"),
@@ -37,6 +38,7 @@ const dom = {
   debugRoute: document.querySelector("#debugRoute"),
   debugSource: document.querySelector("#debugSource"),
   debugRule: document.querySelector("#debugRule"),
+  debugQaHit: document.querySelector("#debugQaHit"),
   debugConfidence: document.querySelector("#debugConfidence"),
   debugRequestId: document.querySelector("#debugRequestId"),
   debugLatency: document.querySelector("#debugLatency"),
@@ -151,8 +153,10 @@ class CustomerChatTransport extends ChatTransport {
       source: typeof data.source === "string" ? data.source : null,
       route: typeof data.route === "string" ? data.route : null,
       product: data.product && typeof data.product.id === "string" ? data.product : null,
+      products: normalizeProducts(data.products),
       productResolution: typeof data.product_resolution === "string" ? data.product_resolution : null,
       ruleName: typeof data.rule_name === "string" ? data.rule_name : null,
+      qaHit: typeof data.qa_hit === "boolean" ? data.qa_hit : null,
       confidence: normalizeNumber(data.confidence),
       sources: normalizeSources(data.sources),
       requestId: requestId ?? (typeof data.request_id === "string" ? data.request_id : null),
@@ -197,8 +201,10 @@ class QACompatibilityTransport extends ChatTransport {
       source: "qa",
       route: typeof data.route === "string" ? data.route : null,
       product: null,
+      products: [],
       productResolution: message.product_id ? "request" : "none",
       ruleName: null,
+      qaHit: typeof data.qa_hit === "boolean" ? data.qa_hit : data.route !== "fallback",
       confidence: normalizeNumber(data.confidence),
       sources: normalizeSources(data.sources),
       requestId: requestId ?? (typeof data.request_id === "string" ? data.request_id : null),
@@ -238,8 +244,10 @@ class RulePreflightTransport extends ChatTransport {
         source: "rule",
         route: typeof decision.route === "string" ? decision.route : null,
         product: null,
+        products: [],
         productResolution: message.product_id ? "request" : "none",
         ruleName: typeof decision.rule_name === "string" ? decision.rule_name : null,
+        qaHit: null,
         confidence: normalizeNumber(decision.confidence),
         sources: [
           {
@@ -291,8 +299,10 @@ class FutureRagChatTransport extends ChatTransport {
       source: typeof data.source === "string" ? data.source : null,
       route: typeof data.route === "string" ? data.route : null,
       product: data.product && typeof data.product.id === "string" ? data.product : null,
+      products: normalizeProducts(data.products),
       productResolution: typeof data.product_resolution === "string" ? data.product_resolution : null,
       ruleName: typeof data.rule_name === "string" ? data.rule_name : null,
+      qaHit: typeof data.qa_hit === "boolean" ? data.qa_hit : null,
       confidence: normalizeNumber(data.confidence),
       sources: normalizeSources(data.sources),
       requestId: requestId ?? (typeof data.request_id === "string" ? data.request_id : null),
@@ -313,6 +323,22 @@ function normalizeSources(value) {
     source: typeof source?.source === "string" && source.source ? source.source : null,
     score: normalizeNumber(source?.score),
   }));
+}
+
+function normalizeProducts(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((product) => product && typeof product.id === "string" && typeof product.name === "string")
+    .slice(0, 5)
+    .map((product) => ({
+      id: product.id,
+      name: product.name,
+      summary: typeof product.summary === "string" ? product.summary : "",
+      internalCode: typeof product.internal_code === "string" ? product.internal_code : null,
+      specifications: product.specifications && typeof product.specifications === "object"
+        ? product.specifications
+        : {},
+    }));
 }
 
 function uuid() {
@@ -448,6 +474,7 @@ function defaultDebug() {
     route: null,
     product_resolution: null,
     rule: null,
+    qa_hit: null,
     confidence: null,
     request_id: null,
     latency: null,
@@ -477,6 +504,7 @@ function updateDebug(changes = {}) {
     route: dom.debugRoute,
     product_resolution: dom.debugProductResolution,
     rule: dom.debugRule,
+    qa_hit: dom.debugQaHit,
     confidence: dom.debugConfidence,
     request_id: dom.debugRequestId,
     latency: dom.debugLatency,
@@ -553,6 +581,36 @@ function createMessageElement(message) {
   content.className = "message-content";
   content.textContent = message.content;
   bubble.append(content);
+
+  if (message.role === "assistant" && Array.isArray(message.products) && message.products.length) {
+    const candidates = document.createElement("div");
+    candidates.className = "product-candidates";
+    message.products.forEach((product) => {
+      const card = document.createElement("div");
+      card.className = "product-candidate";
+      const name = document.createElement("strong");
+      name.textContent = product.name;
+      const summary = document.createElement("span");
+      summary.textContent = product.summary;
+      const details = document.createElement("small");
+      const specification = Object.entries(product.specifications)
+        .slice(0, 2)
+        .map(([key, value]) => `${key}：${value}`)
+        .join(" · ");
+      details.textContent = [product.internalCode, specification].filter(Boolean).join(" · ") || product.id;
+      const selectButton = document.createElement("button");
+      selectButton.type = "button";
+      selectButton.className = "candidate-button";
+      selectButton.textContent = message.selectionResolved ? "已选择" : "选择此商品";
+      selectButton.disabled = Boolean(message.selectionResolved);
+      selectButton.addEventListener("click", () => {
+        selectProductCandidate(message.id, message.selectionFor, product.id);
+      });
+      card.append(name, summary, details, selectButton);
+      candidates.append(card);
+    });
+    bubble.append(candidates);
+  }
 
   if (message.role === "system" && message.status === "failed" && message.retryFor) {
     const retryButton = document.createElement("button");
@@ -652,13 +710,13 @@ function createTransport() {
   }));
 }
 
-async function dispatchCustomerMessage(message) {
+async function dispatchCustomerMessage(message, productIdOverride = null) {
   if (state.isSending) return;
   setSending(true);
   message.status = "sending";
   message.session_id = state.sessionId;
   message.customer_id = state.customerId;
-  message.product_id = currentProductId();
+  message.product_id = productIdOverride || currentProductId();
   message.service_stage = currentServiceStage();
   message.legacy_product_code = dom.legacyProductCode.value.trim();
   renderMessages();
@@ -672,6 +730,7 @@ async function dispatchCustomerMessage(message) {
     route: null,
     product_resolution: message.product_id ? "request" : "none",
     rule: null,
+    qa_hit: null,
     confidence: null,
     request_id: null,
     latency: null,
@@ -683,10 +742,10 @@ async function dispatchCustomerMessage(message) {
     message.status = "sent";
     if (result.product?.id) {
       state.boundProductId = result.product.id;
-    } else if (result.source === "product" && result.route === "product_not_found") {
-      state.boundProductId = null;
     }
     const assistantMessage = createMessage("assistant", result.answer, "sent");
+    assistantMessage.products = result.products;
+    assistantMessage.selectionFor = result.source === "product_selection" ? message.id : null;
     state.messages.push(assistantMessage);
     updateDebug({
       output_message_id: assistantMessage.id,
@@ -695,6 +754,7 @@ async function dispatchCustomerMessage(message) {
       route: result.route,
       product_resolution: result.productResolution,
       rule: result.ruleName,
+      qa_hit: result.qaHit,
       confidence: result.confidence,
       request_id: result.requestId,
       latency: result.latencyMs,
@@ -715,6 +775,7 @@ async function dispatchCustomerMessage(message) {
       route: null,
       product_resolution: message.product_id ? "request" : "none",
       rule: null,
+      qa_hit: null,
       confidence: null,
       request_id: error instanceof TransportError ? error.requestId : null,
       latency: error instanceof TransportError ? error.latencyMs : null,
@@ -727,6 +788,19 @@ async function dispatchCustomerMessage(message) {
     renderMessages();
     renderSessionHistory();
   }
+}
+
+function selectProductCandidate(selectionMessageId, originalMessageId, productId) {
+  if (state.isSending) return;
+  const selectionMessage = state.messages.find((item) => item.id === selectionMessageId);
+  const originalMessage = state.messages.find(
+    (item) => item.id === originalMessageId && item.role === "customer",
+  );
+  if (!selectionMessage || !originalMessage) return;
+  selectionMessage.selectionResolved = true;
+  const confirmedMessage = createMessage("customer", originalMessage.content, "sending");
+  state.messages.push(confirmedMessage);
+  dispatchCustomerMessage(confirmedMessage, productId);
 }
 
 function retryMessage(messageId) {

@@ -8,7 +8,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 ServiceStage = Literal["pre_sale", "post_sale", "general"]
-ProductResolutionSource = Literal["request", "message", "conversation", "none"]
+ProductResolutionSource = Literal[
+    "request",
+    "url",
+    "message_id",
+    "name_exact",
+    "name_candidates",
+    "conversation",
+    "none",
+]
 
 
 class ChatRequest(BaseModel):
@@ -28,6 +36,12 @@ class ChatProductView(BaseModel):
     name: str
 
 
+class ChatProductCandidateView(ChatProductView):
+    summary: str
+    internal_code: str | None = None
+    specifications: dict[str, str] = Field(default_factory=dict)
+
+
 class ChatSourceView(BaseModel):
     chunk_id: str | None = None
     title: str | None = None
@@ -40,11 +54,13 @@ class ChatResponse(BaseModel):
 
     conversation_id: str | None = None
     answer: str
-    source: Literal["rule", "product", "qa"]
+    source: Literal["rule", "product", "product_selection", "qa"]
     route: str | None = None
     product: ChatProductView | None = None
+    products: list[ChatProductCandidateView] = Field(default_factory=list)
     product_resolution: ProductResolutionSource = "none"
     rule_name: str | None = None
     reason_code: str | None = None
     confidence: float | None = None
+    qa_hit: bool | None = None
     sources: list[ChatSourceView] = Field(default_factory=list)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import httpx
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -29,17 +29,56 @@ class ProductProfile(BaseModel):
     id: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=500)
     summary: str = Field(min_length=1, max_length=4000)
+    platform: str | None = Field(default=None, max_length=32)
+    internal_code: str | None = Field(default=None, max_length=64)
+    brand: str | None = Field(default=None, max_length=200)
+    category_name: str | None = Field(default=None, max_length=500)
+    model: str | None = Field(default=None, max_length=200)
     selling_points: list[str] = Field(default_factory=list, max_length=30)
     specifications: dict[str, str] = Field(default_factory=dict)
     usage: str | None = Field(default=None, max_length=4000)
     suitable_for: str | None = Field(default=None, max_length=2000)
     warnings: str | None = Field(default=None, max_length=2000)
     after_sales_limits: str | None = Field(default=None, max_length=2000)
+    compliance_notes: str | None = Field(default=None)
     updated_at: str | None = Field(default=None, max_length=100)
 
     @field_validator(
-        "id", "name", "summary", "usage", "suitable_for", "warnings", "after_sales_limits"
+        "id",
+        "name",
+        "summary",
+        "platform",
+        "internal_code",
+        "brand",
+        "category_name",
+        "model",
+        "usage",
+        "suitable_for",
+        "warnings",
+        "after_sales_limits",
+        "compliance_notes",
     )
+    @classmethod
+    def strip_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+
+class ProductSearchResult(BaseModel):
+    """候选商品选择所需的 PostgreSQL 真实字段。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=500)
+    summary: str = Field(min_length=1, max_length=4000)
+    internal_code: str | None = Field(default=None, max_length=64)
+    specifications: dict[str, str] = Field(default_factory=dict)
+    match_type: Literal["exact", "contains"]
+
+    @field_validator("id", "name", "summary", "internal_code")
     @classmethod
     def strip_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -60,6 +99,8 @@ class ProductAnswer(BaseModel):
 
 class ProductProvider(Protocol):
     async def get_product(self, product_id: str) -> ProductProfile: ...
+
+    async def search_products(self, query: str, limit: int = 5) -> list[ProductSearchResult]: ...
 
 
 class HttpProductClient:
@@ -107,6 +148,42 @@ class HttpProductClient:
         return profile
 
 
+    async def search_products(self, query: str, limit: int = 5) -> list[ProductSearchResult]:
+        base_url = (self._settings.product_api_base_url or "").strip().rstrip("/")
+        if not base_url:
+            raise ProductLookupError("商品资料服务未配置")
+        headers: dict[str, str] = {}
+        token = self._settings.product_api_bearer_token
+        if token and token.get_secret_value().strip():
+            headers["Authorization"] = f"Bearer {token.get_secret_value().strip()}"
+        try:
+            if self._client is not None:
+                response = await self._client.get(
+                    f"{base_url}/products",
+                    params={"query": query, "limit": limit},
+                    headers=headers,
+                    timeout=self._settings.product_api_timeout_seconds,
+                )
+            else:
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        f"{base_url}/products",
+                        params={"query": query, "limit": limit},
+                        headers=headers,
+                        timeout=self._settings.product_api_timeout_seconds,
+                    )
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("响应不是对象")
+            items = payload.get("data")
+            if not isinstance(items, list):
+                raise ValueError("商品候选响应格式无效")
+            return [ProductSearchResult.model_validate(item) for item in items]
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
+            raise ProductLookupError("商品资料暂不可用") from exc
+
+
 class ProductContextBuilder:
     """仅把数据库真实字段格式化为受约束的 LLM 上下文。"""
 
@@ -117,6 +194,14 @@ class ProductContextBuilder:
             ("商品名称", product.name),
             ("商品介绍", product.summary),
         ]
+        described_fields = (
+            ("平台", product.platform),
+            ("内部编码", product.internal_code),
+            ("品牌", product.brand),
+            ("分类", product.category_name),
+            ("型号", product.model),
+        )
+        sections.extend((title, value) for title, value in described_fields if value)
         if product.selling_points:
             sections.append(("特点", "\n".join(f"- {item}" for item in product.selling_points)))
         if product.specifications:
@@ -128,6 +213,7 @@ class ProductContextBuilder:
             ("适合场景", product.suitable_for),
             ("注意事项", product.warnings),
             ("售后限制", product.after_sales_limits),
+            ("合规说明", product.compliance_notes),
             ("资料更新时间", product.updated_at),
         )
         sections.extend((title, value) for title, value in optional_sections if value)

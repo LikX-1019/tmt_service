@@ -11,6 +11,7 @@ from app.services.product_service import (
     ProductLookupError,
     ProductNotFoundError,
     ProductProfile,
+    ProductSearchResult,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -45,6 +46,25 @@ class FakeProducts:
         if product_id in self.products:
             return self.products[product_id]
         raise ProductNotFoundError(product_id)
+
+    async def search_products_by_name(
+        self, query: str, *, limit: int = 5
+    ) -> list[ProductSearchResult]:
+        normalized = query.casefold()
+        matches = []
+        for product in self.products.values():
+            name = product.name.casefold()
+            if normalized not in name:
+                continue
+            matches.append(
+                ProductSearchResult(
+                    id=product.id,
+                    name=product.name,
+                    summary=product.summary,
+                    match_type="exact" if normalized == name else "contains",
+                )
+            )
+        return matches[:limit]
 
 
 class FailingProducts(FakeProducts):
@@ -91,6 +111,12 @@ def make_service(
         {
             "1001": ProductProfile(id="1001", name="护腕", summary="日常支撑。"),
             "2002": ProductProfile(id="2002", name="护膝", summary="运动支撑。"),
+            "3003": ProductProfile(
+                id="3003", name="运动护膝 标准版", summary="标准运动支撑。"
+            ),
+            "4004": ProductProfile(
+                id="4004", name="运动护膝 专业版", summary="专业运动支撑。"
+            ),
         }
     )
     conversations = conversations or FakeConversations()
@@ -165,7 +191,7 @@ async def test_message_product_id_binds_conversation() -> None:
         ChatRequest(conversation_id="c1", message="商品ID：1001 这个怎么样")
     )
 
-    assert result.product_resolution == "message"
+    assert result.product_resolution == "message_id"
     assert result.source == "product"
     assert conversations.values["c1"] == ("1001", "护腕")
     assert qa.calls == 0
@@ -236,7 +262,127 @@ async def test_explicit_missing_product_does_not_fallback_to_qa_or_bind() -> Non
     assert products.calls == ["999999"]
     assert answers.calls == []
     assert qa.calls == 0
+    assert conversations.values["c1"] == ("1001", "护腕")
+
+
+async def test_known_product_url_is_validated_bound_and_answered() -> None:
+    service, products, answers, qa, conversations = make_service()
+
+    result = await service.chat(
+        ChatRequest(
+            conversation_id="c1",
+            message="http://127.0.0.1:8088/products/1001 这个商品有什么特点？",
+        )
+    )
+
+    assert result.source == "product"
+    assert result.product_resolution == "url"
+    assert products.calls == ["1001"]
+    assert answers.calls == ["1001"]
+    assert qa.calls == 0
+    assert conversations.values["c1"] == ("1001", "护腕")
+
+
+async def test_exact_product_name_binds_and_answers() -> None:
+    service, products, answers, qa, conversations = make_service()
+
+    result = await service.chat(
+        ChatRequest(conversation_id="c1", message="我想看看 护膝")
+    )
+
+    assert result.source == "product"
+    assert result.product_resolution == "name_exact"
+    assert result.product is not None and result.product.id == "2002"
+    assert products.calls == ["2002"]
+    assert answers.calls == ["2002"]
+    assert qa.calls == 0
+    assert conversations.values["c1"] == ("2002", "护膝")
+
+
+async def test_ambiguous_product_name_returns_candidates_without_binding() -> None:
+    service, products, answers, qa, conversations = make_service()
+
+    result = await service.chat(
+        ChatRequest(conversation_id="c1", message="我想看看 运动护膝")
+    )
+
+    assert result.source == "product_selection"
+    assert result.product_resolution == "name_candidates"
+    assert [product.id for product in result.products] == ["3003", "4004"]
+    assert products.calls == []
+    assert answers.calls == []
+    assert qa.calls == 0
     assert "c1" not in conversations.values
+
+
+async def test_explicit_product_name_without_match_does_not_fallback_to_qa() -> None:
+    service, products, answers, qa, conversations = make_service()
+
+    result = await service.chat(
+        ChatRequest(conversation_id="c1", message="我想看看 不存在的测试商品XYZ")
+    )
+
+    assert result.source == "product"
+    assert result.route == "product_not_found"
+    assert products.calls == []
+    assert answers.calls == []
+    assert qa.calls == 0
+    assert "c1" not in conversations.values
+
+
+async def test_external_product_url_is_rejected_without_qa_or_llm() -> None:
+    service, products, answers, qa, _ = make_service()
+
+    result = await service.chat(
+        ChatRequest(
+            conversation_id="c1",
+            message="https://external.example/products/1001 这个商品怎么样？",
+        )
+    )
+
+    assert result.source == "product"
+    assert result.route == "product_link_unsupported"
+    assert products.calls == []
+    assert answers.calls == []
+    assert qa.calls == 0
+
+
+async def test_qa_detour_preserves_product_for_later_follow_up() -> None:
+    service, products, answers, qa, conversations = make_service()
+    await service.chat(
+        ChatRequest(conversation_id="c1", message="这个怎么样", product_id="2002")
+    )
+
+    qa_result = await service.chat(
+        ChatRequest(conversation_id="c1", message="你们什么时候发货")
+    )
+    product_result = await service.chat(
+        ChatRequest(conversation_id="c1", message="那这个商品还有什么注意事项？")
+    )
+
+    assert qa_result.source == "qa"
+    assert product_result.source == "product"
+    assert product_result.product_resolution == "conversation"
+    assert conversations.values["c1"] == ("2002", "护膝")
+    assert products.calls == ["2002", "2002"]
+    assert answers.calls == ["2002", "2002"]
+    assert qa.calls == 1
+
+
+async def test_unknown_product_attribute_uses_bound_product_context() -> None:
+    conversations = FakeConversations()
+    conversations.values["c1"] = ("2002", "护膝")
+    service, products, answers, qa, _ = make_service(conversations=conversations)
+
+    result = await service.chat(
+        ChatRequest(conversation_id="c1", message="这个商品的防水等级是多少？")
+    )
+
+    assert result.source == "product"
+    assert result.product_resolution == "conversation"
+    assert products.calls == ["2002"]
+    assert answers.calls == ["2002"]
+    assert qa.calls == 0
 
 
 async def test_product_provider_failure_is_explicitly_unavailable() -> None:

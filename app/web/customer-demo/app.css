@@ -421,6 +421,37 @@ button:disabled { cursor: not-allowed; opacity: .6; }
 
 .message-content { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: clamp(13.5px, .9vw, 14.5px); line-height: 1.62; }
 
+.product-candidates {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.product-candidate {
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+
+.product-candidate strong { font-size: 13px; }
+.product-candidate span { color: #465366; font-size: 12px; line-height: 1.5; }
+.product-candidate small { color: var(--muted); overflow-wrap: anywhere; }
+
+.candidate-button {
+  justify-self: start;
+  min-height: 32px;
+  border: 0;
+  border-radius: 999px;
+  padding: 0 13px;
+  color: #fff;
+  background: var(--info);
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .message-meta {
   display: flex;
   align-items: center;

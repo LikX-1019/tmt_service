@@ -5,7 +5,7 @@ import pytest
 from app.qa.evidence_checker import EvidenceChecker
 from app.qa.faq_matcher import FAQMatcher
 from app.qa.models import FAQItem, RetrievalDocument
-from app.qa.service import QAService
+from app.qa.service import FALLBACK_ANSWER, QAService
 
 
 def make_service(
@@ -80,6 +80,8 @@ async def test_fallback_skips_answer_generator() -> None:
     result = await service.answer("你们公司的老板是谁")
 
     assert result.route == "fallback"
+    assert result.answer == FALLBACK_ANSWER
+    assert result.answer == "目前知识库中暂无相关信息，请联系人工客服获取帮助。"
     assert result.sources == []
     generator.generate.assert_not_awaited()
 

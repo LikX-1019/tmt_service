@@ -11,10 +11,11 @@ from app.services.product_service import (
     ProductNotFoundError,
     ProductProfile,
     ProductProvider,
+    ProductSearchResult,
 )
 
 
-_PRODUCT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_PRODUCT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 
 
 class ProductRepository:
@@ -33,5 +34,20 @@ class ProductRepository:
             return await self._provider.get_product(normalized)
         except ProductNotFoundError:
             raise
+        except Exception as exc:
+            raise ProductLookupError("商品资料暂不可用") from exc
+
+    async def search_products_by_name(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+    ) -> list[ProductSearchResult]:
+        normalized = query.strip()
+        if len(normalized) < 2 or len(normalized) > 200:
+            raise InvalidRequestError("商品名称搜索词长度无效")
+        safe_limit = min(max(limit, 1), 5)
+        try:
+            return await self._provider.search_products(normalized, safe_limit)
         except Exception as exc:
             raise ProductLookupError("商品资料暂不可用") from exc
