@@ -12,6 +12,8 @@ const dom = {
   customerId: document.querySelector("#customerId"),
   newSessionButton: document.querySelector("#newSessionButton"),
   resetSessionButton: document.querySelector("#resetSessionButton"),
+  sessionList: document.querySelector("#sessionList"),
+  sessionCount: document.querySelector("#sessionCount"),
   productForm: document.querySelector("#productForm"),
   productId: document.querySelector("#productId"),
   legacyProductCode: document.querySelector("#legacyProductCode"),
@@ -49,6 +51,7 @@ const state = {
   transportMode: "qa-compatibility",
   transport: null,
   debug: {},
+  sessions: new Map(),
 };
 
 class TransportError extends Error {
@@ -298,6 +301,75 @@ function updateContextView() {
     current_product_id: productId || null,
     service_stage: serviceStage,
   });
+  persistCurrentSession();
+}
+
+function persistCurrentSession() {
+  if (!state.sessionId) return;
+  state.sessions.set(state.sessionId, {
+    sessionId: state.sessionId,
+    customerId: state.customerId,
+    messages: state.messages,
+    productId: currentProductId(),
+    legacyProductCode: dom.legacyProductCode.value.trim(),
+    serviceStage: currentServiceStage(),
+    debug: state.debug,
+  });
+  while (state.sessions.size > 12) {
+    const oldestSessionId = state.sessions.keys().next().value;
+    if (oldestSessionId === state.sessionId) break;
+    state.sessions.delete(oldestSessionId);
+  }
+}
+
+function renderSessionHistory() {
+  const sessions = Array.from(state.sessions.values()).reverse();
+  dom.sessionCount.textContent = `${sessions.length} 个`;
+  dom.sessionList.replaceChildren();
+
+  sessions.forEach((session) => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = `session-item${session.sessionId === state.sessionId ? " active" : ""}`;
+    item.dataset.sessionId = session.sessionId;
+    item.setAttribute("aria-current", session.sessionId === state.sessionId ? "true" : "false");
+
+    const title = document.createElement("strong");
+    title.textContent = `会话 ${session.sessionId.replace("sess_", "").slice(0, 8)}`;
+    const customer = document.createElement("span");
+    customer.className = "session-customer";
+    customer.textContent = session.customerId;
+    const meta = document.createElement("em");
+    const product = session.productId || "未指定商品";
+    const stage = SERVICE_STAGE_LABELS[session.serviceStage] ?? session.serviceStage ?? "通用";
+    meta.textContent = `${product} · ${stage} · ${session.messages.length} 条消息`;
+    item.append(title, customer, meta);
+    item.addEventListener("click", () => selectSession(session.sessionId));
+    dom.sessionList.append(item);
+  });
+}
+
+function selectSession(sessionId) {
+  if (state.isSending || sessionId === state.sessionId) return;
+  const session = state.sessions.get(sessionId);
+  if (!session) return;
+
+  persistCurrentSession();
+  state.sessionId = session.sessionId;
+  state.customerId = session.customerId;
+  state.messages = session.messages;
+  state.debug = { ...session.debug };
+  dom.productId.value = session.productId ?? "";
+  dom.legacyProductCode.value = session.legacyProductCode ?? "";
+  dom.stageInputs.forEach((input) => {
+    input.checked = input.value === (session.serviceStage ?? "general");
+  });
+  dom.sessionId.textContent = state.sessionId;
+  dom.customerId.textContent = state.customerId;
+  updateContextView();
+  renderMessages();
+  renderSessionHistory();
+  if (window.matchMedia("(max-width: 1000px)").matches) closePanels();
 }
 
 function defaultDebug() {
@@ -477,6 +549,7 @@ function removeTypingIndicator() {
 
 function resetSession() {
   if (state.isSending) return;
+  persistCurrentSession();
   state.sessionId = `sess_${uuid()}`;
   state.customerId = `demo_customer_${uuid()}`;
   state.messages = [];
@@ -488,7 +561,9 @@ function resetSession() {
   updateDebug({
     output_message_id: welcome.id,
   });
+  persistCurrentSession();
   renderMessages();
+  renderSessionHistory();
 }
 
 function setSending(isSending) {
@@ -563,7 +638,9 @@ async function dispatchCustomerMessage(message) {
   } finally {
     removeTypingIndicator();
     setSending(false);
+    persistCurrentSession();
     renderMessages();
+    renderSessionHistory();
   }
 }
 
@@ -656,6 +733,7 @@ function initialize() {
   bindEvents();
   updateContextView();
   resetSession();
+  renderSessionHistory();
 }
 
 initialize();

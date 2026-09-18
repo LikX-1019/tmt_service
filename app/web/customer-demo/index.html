@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="light">
   <title>小满客服 · 消费者聊天模拟器</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/assets/customer-demo/app.css?v=2">
+  <link rel="stylesheet" href="/assets/customer-demo/app.css?v=3">
 </head>
 <body>
   <div class="app-shell">
@@ -54,6 +54,15 @@
           <button type="button" id="resetSessionButton" class="secondary-button full-width">生成新 Session</button>
           <p class="panel-note">点击后会清空聊天记录，并重新显示默认欢迎消息。</p>
         </section>
+
+        <nav class="panel-card session-history" aria-label="测试会话列表">
+          <div class="panel-title">
+            <h2>测试会话</h2>
+            <span id="sessionCount">1 个</span>
+          </div>
+          <div id="sessionList" class="session-list"></div>
+          <p class="panel-note">点击会话可切换并保留该会话的消息、商品与调试上下文。</p>
+        </nav>
 
         <section class="panel-card">
           <div class="panel-title">
@@ -158,6 +167,6 @@
   </div>
 
   <div id="panelScrim" class="panel-scrim" hidden></div>
-  <script src="/assets/customer-demo/app.js?v=2" defer></script>
+  <script src="/assets/customer-demo/app.js?v=3" defer></script>
 </body>
 </html>

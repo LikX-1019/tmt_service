@@ -47,6 +47,38 @@ async def test_customer_demo_static_assets_are_served(
 
 
 @pytest.mark.asyncio
+async def test_customer_demo_layout_keeps_scrolling_inside_chat_panel() -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/assets/customer-demo/app.css")
+
+    assert response.status_code == 200
+    assert "height: 100dvh" in response.text
+    assert "overflow-y: auto" in response.text
+    assert "overscroll-behavior: contain" in response.text
+    assert "clamp(218px, 19vw, 300px)" in response.text
+    assert "minmax(400px, 1fr)" in response.text
+
+
+@pytest.mark.asyncio
+async def test_customer_demo_js_supports_selectable_session_history() -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/assets/customer-demo/app.js")
+
+    assert response.status_code == 200
+    assert "function renderSessionHistory" in response.text
+    assert "function selectSession" in response.text
+    assert 'item.addEventListener("click", () => selectSession(session.sessionId))' in response.text
+    assert 'item.className = `session-item${session.sessionId === state.sessionId ? " active" : ""}`' in response.text
+    assert "session-item" in response.text
+
+
+@pytest.mark.asyncio
 async def test_customer_demo_transport_uses_qa_compatibility_and_safe_rendering() -> None:
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
