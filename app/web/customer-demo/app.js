@@ -31,9 +31,12 @@ const dom = {
   debugInputMessageId: document.querySelector("#debugInputMessageId"),
   debugOutputMessageId: document.querySelector("#debugOutputMessageId"),
   debugProductId: document.querySelector("#debugProductId"),
+  debugProductResolution: document.querySelector("#debugProductResolution"),
   debugServiceStage: document.querySelector("#debugServiceStage"),
   debugTransportMode: document.querySelector("#debugTransportMode"),
   debugRoute: document.querySelector("#debugRoute"),
+  debugSource: document.querySelector("#debugSource"),
+  debugRule: document.querySelector("#debugRule"),
   debugConfidence: document.querySelector("#debugConfidence"),
   debugRequestId: document.querySelector("#debugRequestId"),
   debugLatency: document.querySelector("#debugLatency"),
@@ -48,8 +51,9 @@ const state = {
   customerId: "",
   messages: [],
   isSending: false,
-  transportMode: "qa-compatibility",
+  transportMode: "chat",
   transport: null,
+  boundProductId: null,
   debug: {},
   sessions: new Map(),
 };
@@ -113,6 +117,50 @@ class ChatTransport {
   }
 }
 
+class CustomerChatTransport extends ChatTransport {
+  constructor() {
+    super();
+    this.endpoint = "/api/v1/chat";
+  }
+
+  get mode() {
+    return "chat";
+  }
+
+  async send(message) {
+    const payload = {
+      conversation_id: message.session_id,
+      customer_id: message.customer_id,
+      message: message.content,
+      product_id: message.product_id || null,
+      service_stage: message.service_stage,
+    };
+    const { body, requestId, latencyMs } = await this.postJson(this.endpoint, payload);
+    if (body && typeof body === "object" && body.code !== undefined && body.code !== 0) {
+      const messageText = typeof body.message === "string" ? body.message : "Chat 服务返回业务错误。";
+      throw new TransportError(messageText, { requestId, latencyMs });
+    }
+
+    const data = body?.data ?? body;
+    if (!data || typeof data.answer !== "string" || data.answer.trim() === "") {
+      throw new TransportError("Chat 服务没有返回有效答案。", { requestId, latencyMs });
+    }
+
+    return {
+      answer: data.answer,
+      source: typeof data.source === "string" ? data.source : null,
+      route: typeof data.route === "string" ? data.route : null,
+      product: data.product && typeof data.product.id === "string" ? data.product : null,
+      productResolution: typeof data.product_resolution === "string" ? data.product_resolution : null,
+      ruleName: typeof data.rule_name === "string" ? data.rule_name : null,
+      confidence: normalizeNumber(data.confidence),
+      sources: normalizeSources(data.sources),
+      requestId: requestId ?? (typeof data.request_id === "string" ? data.request_id : null),
+      latencyMs,
+    };
+  }
+}
+
 class QACompatibilityTransport extends ChatTransport {
   constructor(options = {}) {
     super();
@@ -146,7 +194,11 @@ class QACompatibilityTransport extends ChatTransport {
 
     return {
       answer: data.answer,
+      source: "qa",
       route: typeof data.route === "string" ? data.route : null,
+      product: null,
+      productResolution: message.product_id ? "request" : "none",
+      ruleName: null,
       confidence: normalizeNumber(data.confidence),
       sources: normalizeSources(data.sources),
       requestId: requestId ?? (typeof data.request_id === "string" ? data.request_id : null),
@@ -183,7 +235,11 @@ class RulePreflightTransport extends ChatTransport {
     if (decision && typeof decision.fixed_reply === "string" && decision.fixed_reply) {
       return {
         answer: decision.fixed_reply,
+        source: "rule",
         route: typeof decision.route === "string" ? decision.route : null,
+        product: null,
+        productResolution: message.product_id ? "request" : "none",
+        ruleName: typeof decision.rule_name === "string" ? decision.rule_name : null,
         confidence: normalizeNumber(decision.confidence),
         sources: [
           {
@@ -232,7 +288,11 @@ class FutureRagChatTransport extends ChatTransport {
     }
     return {
       answer: data.answer,
+      source: typeof data.source === "string" ? data.source : null,
       route: typeof data.route === "string" ? data.route : null,
+      product: data.product && typeof data.product.id === "string" ? data.product : null,
+      productResolution: typeof data.product_resolution === "string" ? data.product_resolution : null,
+      ruleName: typeof data.rule_name === "string" ? data.rule_name : null,
       confidence: normalizeNumber(data.confidence),
       sources: normalizeSources(data.sources),
       requestId: requestId ?? (typeof data.request_id === "string" ? data.request_id : null),
@@ -293,7 +353,8 @@ function currentProductId() {
 }
 
 function updateContextView() {
-  const productId = currentProductId();
+  const explicitProductId = currentProductId();
+  const productId = state.boundProductId || explicitProductId;
   const serviceStage = currentServiceStage();
   dom.currentProductChip.textContent = productId || "未指定商品";
   dom.currentStageChip.textContent = SERVICE_STAGE_LABELS[serviceStage] ?? serviceStage;
@@ -310,7 +371,8 @@ function persistCurrentSession() {
     sessionId: state.sessionId,
     customerId: state.customerId,
     messages: state.messages,
-    productId: currentProductId(),
+    explicitProductId: currentProductId(),
+    boundProductId: state.boundProductId,
     legacyProductCode: dom.legacyProductCode.value.trim(),
     serviceStage: currentServiceStage(),
     debug: state.debug,
@@ -340,7 +402,7 @@ function renderSessionHistory() {
     customer.className = "session-customer";
     customer.textContent = session.customerId;
     const meta = document.createElement("em");
-    const product = session.productId || "未指定商品";
+    const product = session.boundProductId || session.explicitProductId || "未指定商品";
     const stage = SERVICE_STAGE_LABELS[session.serviceStage] ?? session.serviceStage ?? "通用";
     meta.textContent = `${product} · ${stage} · ${session.messages.length} 条消息`;
     item.append(title, customer, meta);
@@ -358,8 +420,9 @@ function selectSession(sessionId) {
   state.sessionId = session.sessionId;
   state.customerId = session.customerId;
   state.messages = session.messages;
+  state.boundProductId = session.boundProductId ?? null;
   state.debug = { ...session.debug };
-  dom.productId.value = session.productId ?? "";
+  dom.productId.value = session.explicitProductId ?? "";
   dom.legacyProductCode.value = session.legacyProductCode ?? "";
   dom.stageInputs.forEach((input) => {
     input.checked = input.value === (session.serviceStage ?? "general");
@@ -378,10 +441,13 @@ function defaultDebug() {
     customer_id: state.customerId || null,
     input_message_id: null,
     output_message_id: null,
-    current_product_id: currentProductId() || null,
+    current_product_id: state.boundProductId || currentProductId() || null,
     service_stage: currentServiceStage(),
     transport_mode: state.transport?.mode ?? state.transportMode,
+    source: null,
     route: null,
+    product_resolution: null,
+    rule: null,
     confidence: null,
     request_id: null,
     latency: null,
@@ -400,13 +466,17 @@ function updateDebug(changes = {}) {
   state.debug = { ...defaultDebug(), ...state.debug, ...changes };
   const mappings = {
     session_id: dom.debugSessionId,
+    conversation_id: dom.debugConversationId,
     customer_id: dom.debugCustomerId,
     input_message_id: dom.debugInputMessageId,
     output_message_id: dom.debugOutputMessageId,
     current_product_id: dom.debugProductId,
     service_stage: dom.debugServiceStage,
     transport_mode: dom.debugTransportMode,
+    source: dom.debugSource,
     route: dom.debugRoute,
+    product_resolution: dom.debugProductResolution,
+    rule: dom.debugRule,
     confidence: dom.debugConfidence,
     request_id: dom.debugRequestId,
     latency: dom.debugLatency,
@@ -553,6 +623,7 @@ function resetSession() {
   state.sessionId = `sess_${uuid()}`;
   state.customerId = `demo_customer_${uuid()}`;
   state.messages = [];
+  state.boundProductId = null;
   state.debug = {};
   const welcome = createMessage("assistant", WELCOME_MESSAGE, "sent");
   state.messages.push(welcome);
@@ -574,12 +645,11 @@ function setSending(isSending) {
 }
 
 function createTransport() {
-  const innerTransport = state.transportMode === "rag-chat"
-    ? new FutureRagChatTransport()
-    : new QACompatibilityTransport({
-        getLegacyProductCode: () => dom.legacyProductCode.value.trim(),
-      });
-  return new RulePreflightTransport(innerTransport);
+  if (state.transportMode === "chat") return new CustomerChatTransport();
+  if (state.transportMode === "rag-chat") return new FutureRagChatTransport();
+  return new RulePreflightTransport(new QACompatibilityTransport({
+    getLegacyProductCode: () => dom.legacyProductCode.value.trim(),
+  }));
 }
 
 async function dispatchCustomerMessage(message) {
@@ -596,9 +666,12 @@ async function dispatchCustomerMessage(message) {
   updateDebug({
     input_message_id: message.id,
     output_message_id: null,
-    current_product_id: message.product_id || null,
+    current_product_id: state.boundProductId || message.product_id || null,
     service_stage: message.service_stage,
+    source: null,
     route: null,
+    product_resolution: message.product_id ? "request" : "none",
+    rule: null,
     confidence: null,
     request_id: null,
     latency: null,
@@ -608,11 +681,20 @@ async function dispatchCustomerMessage(message) {
   try {
     const result = await state.transport.send(message);
     message.status = "sent";
+    if (result.product?.id) {
+      state.boundProductId = result.product.id;
+    } else if (result.source === "product" && result.route === "product_not_found") {
+      state.boundProductId = null;
+    }
     const assistantMessage = createMessage("assistant", result.answer, "sent");
     state.messages.push(assistantMessage);
     updateDebug({
       output_message_id: assistantMessage.id,
+      current_product_id: state.boundProductId || message.product_id || null,
+      source: result.source,
       route: result.route,
+      product_resolution: result.productResolution,
+      rule: result.ruleName,
       confidence: result.confidence,
       request_id: result.requestId,
       latency: result.latencyMs,
@@ -629,7 +711,10 @@ async function dispatchCustomerMessage(message) {
     state.messages.push(errorMessage);
     updateDebug({
       output_message_id: null,
+      source: null,
       route: null,
+      product_resolution: message.product_id ? "request" : "none",
+      rule: null,
       confidence: null,
       request_id: error instanceof TransportError ? error.requestId : null,
       latency: error instanceof TransportError ? error.latencyMs : null,
@@ -681,7 +766,10 @@ function bindEvents() {
     state.transport = createTransport();
     updateDebug({
       transport_mode: state.transport?.mode ?? state.transportMode,
+      source: null,
       route: null,
+      product_resolution: state.boundProductId ? "conversation" : "none",
+      rule: null,
       confidence: null,
       request_id: null,
       latency: null,

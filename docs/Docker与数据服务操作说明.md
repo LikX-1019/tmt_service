@@ -1,29 +1,12 @@
 # 智能客服 Docker 与数据服务操作说明
 
-更新日期：2026-09-14（Asia/Shanghai）
+更新日期：2026-09-18（Asia/Shanghai）
 
 ## 1. 当前运行与 QA 入库状态
 
 本项目的 `docker-compose.yml` 当前启动 6 个基础设施服务：MySQL、Redis、etcd、MinIO、Milvus 和 Attu。应用服务尚未加入 Compose，`Dockerfile`、`main.py` 及部分业务模块仍是占位文件，因此本文只描述现有基础设施与 QA 数据操作。
 
-2026-09-14 已完成标准 QA 工作簿校验、幂等导入、Compose 全量重启和重启后复检。
-
-| 检查项 | 结果 |
-| --- | ---: |
-| 来源文件 | `data/qa/整理结果/智能客服标准QA整理.xlsx` |
-| 来源工作表 | `标准QA` |
-| Excel 有效 QA | 294 条 |
-| MySQL `cs_qa` | 294 条 |
-| 唯一 `qa_code` | 294 个 |
-| 重复编号组 | 0 |
-| 空标准问题 / 空标准答案 | 0 / 0 |
-| 已发布 / 草稿 | 222 / 72 |
-| 可用 / 待复核 / 待验证 | 222 / 58 / 14 |
-| 最近导入批次 | `QA-20260914-160233` |
-| Redis 连通性 / 当前键数 | `PONG` / 0 |
-| Milvus 健康状态 / 集合数 | HTTP 200 / 0 |
-
-QA 已完整写入 MySQL。Milvus 当前没有集合，且项目中的向量入库、Embedding 和检索实现仍为 TODO，所以现阶段不能把“QA 已写入 MySQL”理解为“QA 已建立 Milvus 向量索引”。
+2026-09-18 起，旧 JAFFICK QA 源数据已失效并从仓库移除；运行时旧记录位于 MySQL `cs_qa`，向量副本位于 Milvus。请先阅读 `docs/QA清空与重建.md`，由管理员确认环境后执行安全清理脚本。QA 能力、表结构、导入、索引与检索接口全部保留；空知识库会返回固定 fallback，不会调用 LLM 编造。
 
 ## 2. 服务地址
 
@@ -140,10 +123,12 @@ docker compose logs -f milvus
 
 该脚本创建 `.env` 中 `MYSQL_DATABASE` 指定的数据库和 `cs_qa` 表。重复执行是安全的，不会删除已有数据。
 
-### 导入当前清洗版 QA
+### 导入新的已审核 QA
+
+旧数据清理后，提供新的审核工作簿路径：
 
 ```powershell
-.\scripts\import_cleaned_qa.ps1
+.\scripts\import_cleaned_qa.ps1 -Source "data\qa\new-reviewed-qa.xlsx"
 ```
 
 导入脚本会先校验工作表名称、必填列、问题编号、标准问法、标准回答、枚举值和重复编号。数据库以 `qa_code` 为唯一键，重复运行会更新已有记录，不会生成重复 QA。
@@ -151,7 +136,7 @@ docker compose logs -f milvus
 指定其他工作簿时，路径相对于项目根目录：
 
 ```powershell
-.\scripts\import_cleaned_qa.ps1 -Source 'data\qa\整理结果\智能客服标准QA整理.xlsx'
+.\scripts\import_cleaned_qa.ps1 -Source 'data\qa\new-reviewed-qa.xlsx'
 ```
 
 ### 导入后核验

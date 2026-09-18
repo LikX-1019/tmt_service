@@ -17,7 +17,7 @@ async def test_customer_demo_page_is_served_by_fastapi() -> None:
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
     assert "消费者侧聊天模拟器" in response.text
-    assert "当前使用规则前置 + 单轮 QA 兼容模式，多轮 State 尚未接入。" in response.text
+    assert "当前使用统一 Chat API，由后端决定规则、商品与 QA 路由。" in response.text
     assert "/assets/customer-demo/app.css" in response.text
     assert "/assets/customer-demo/app.js" in response.text
 
@@ -27,7 +27,7 @@ async def test_customer_demo_page_is_served_by_fastapi() -> None:
     ("asset_name", "content_type", "marker"),
     [
         ("app.css", "text/css", ".chat-panel"),
-        ("app.js", "text/javascript", "class QACompatibilityTransport"),
+        ("app.js", "text/javascript", "class CustomerChatTransport"),
     ],
 )
 async def test_customer_demo_static_assets_are_served(
@@ -88,10 +88,16 @@ async def test_customer_demo_transport_uses_qa_compatibility_and_safe_rendering(
 
     assert response.status_code == 200
     assert 'this.endpoint = "/api/v1/qa"' in response.text
+    assert 'this.endpoint = "/api/v1/chat"' in response.text
+    assert 'this.endpoint = "/api/v1/qa"' in response.text
     assert 'this.endpoint = "/api/v1/rag-chat/messages"' in response.text
     assert 'this.endpoint = "/api/v1/rules/evaluate"' in response.text
     assert "class RulePreflightTransport" in response.text
+    assert "class QACompatibilityTransport" in response.text
+    assert "conversation_id: message.session_id" in response.text
     assert "product_id: message.product_id || null" in response.text
+    assert "source: result.source" in response.text
+    assert "product_resolution: result.productResolution" in response.text
     assert "content.textContent = message.content" in response.text
     assert "innerHTML" not in response.text
 

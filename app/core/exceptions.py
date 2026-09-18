@@ -45,6 +45,22 @@ class InvalidRequestError(AppException):
     status_code = 400
 
 
+class ConversationStateUnavailableError(AppException):
+    """会话商品上下文数据库不可用。"""
+
+    code = "CONVERSATION_STATE_UNAVAILABLE"
+    default_message = "会话上下文暂时不可用"
+    status_code = 503
+
+
+class ProductServiceUnavailableError(AppException):
+    """商品资料服务不可用。"""
+
+    code = "PRODUCT_SERVICE_UNAVAILABLE"
+    default_message = "商品资料暂时不可用，请稍后重试"
+    status_code = 503
+
+
 class ConsoleUnavailableError(AppException):
     """控制台数据库或浏览器连接器不可用。"""
 

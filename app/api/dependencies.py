@@ -8,6 +8,7 @@ from functools import lru_cache
 from fastapi import Request
 
 from app.core.config import get_settings
+from app.database.session import get_session_factory
 from app.core.exceptions import ConsoleUnavailableError
 from app.qa.answer_generator import QAAnswerGenerator
 from app.qa.catalog import load_catalog
@@ -18,6 +19,8 @@ from app.rag.retrieval.bm25_retriever import BM25Retriever
 from app.rag.retrieval.dense_retriever import DenseRetriever
 from app.rag.retrieval.hybrid_retriever import HybridRetriever
 from app.rag.retrieval.reranker import BGEReranker
+from app.repositories.conversation_repository import ConversationProductRepository
+from app.repositories.product_repository import ProductRepository
 from app.services.chat_service import ChatService
 from app.services.console_runtime import ConsoleRuntime
 from app.services.shop_runtime_manager import ShopRuntimeManager
@@ -28,8 +31,12 @@ _qa_service_lock = asyncio.Lock()
 
 @lru_cache(maxsize=1)
 def get_chat_service() -> ChatService:
-    """返回进程级无状态聊天服务，便于缓存复用和测试替换。"""
-    return ChatService()
+    """返回统一后端聊天路由；懒加载商品、会话和 QA 依赖。"""
+    return ChatService(
+        conversation_repository=ConversationProductRepository(get_session_factory()),
+        product_repository=ProductRepository(),
+        qa_provider=get_qa_service,
+    )
 
 
 async def get_qa_service() -> QAService:
@@ -55,6 +62,7 @@ async def get_qa_service() -> QAService:
                 BGEReranker(settings=settings),
                 EvidenceChecker(settings.rag_score_threshold),
                 QAAnswerGenerator(),
+                has_knowledge=bool(catalog.documents),
             )
     return _qa_service
 

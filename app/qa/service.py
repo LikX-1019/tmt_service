@@ -29,8 +29,10 @@ class QAService:
         evidence_checker: EvidenceChecker,
         answer_generator: Any,
         normalizer: QueryNormalizer | None = None,
+        has_knowledge: bool = True,
     ) -> None:
         self._normalizer = normalizer or QueryNormalizer()
+        self._has_knowledge = has_knowledge
         self._faq_matcher = faq_matcher
         self._retriever = retriever
         self._reranker = reranker
@@ -120,6 +122,20 @@ class QAService:
     ) -> QAResult:
         """跳过精确 FAQ，使用既有检索和证据门槛生成通用答案。"""
         started_at = perf_counter()
+        if not self._has_knowledge:
+            result = QAResult(
+                answer=FALLBACK_ANSWER,
+                route="fallback",
+                decision_factors={"knowledge_base_empty": True},
+                retrieval_counts={"dense": 0, "bm25": 0, "fusion": 0, "rerank": 0},
+            )
+            self._log_result(
+                started_at,
+                result,
+                faq_hit=False,
+                query_length=len(query),
+            )
+            return result
         faq_match = self._faq_matcher.resolve(
             self._normalizer.normalize(query),
             product_code=product_code,

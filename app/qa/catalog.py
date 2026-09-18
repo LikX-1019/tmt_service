@@ -140,8 +140,7 @@ async def load_mysql_catalog() -> QACatalog:
     async with get_session_factory()() as session:
         result = await session.execute(statement)
         rows = [dict(row) for row in result.mappings().all()]
-    if not rows:
-        raise RuntimeError("cs_qa 中没有 published + usable 的有效 QA 数据")
+    # 清理旧知识后允许空目录；QAService 会安全返回 fallback，而不是启动失败。
     return _build_catalog(rows)
 
 

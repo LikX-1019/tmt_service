@@ -95,10 +95,10 @@ uv run alembic upgrade head
 Alembic 是所有正式表（包括 `cs_qa`、会话、消息、发送任务和审计事件）的唯一 schema
 来源。全新数据库和现有开发库都使用同一条迁移链，不通过应用启动时 `create_all()` 建表。
 
-首次迁移后导入清洗后的 QA 工作簿：
+旧 JAFFICK QA 数据已失效并移除。首次迁移后如需重建 QA，先参考 `docs/QA清空与重建.md` 清理旧环境，再导入新的已审核工作簿：
 
 ```powershell
-powershell -File scripts/import_cleaned_qa.ps1
+powershell -File scripts/import_cleaned_qa.ps1 -Source "data/qa/new-reviewed-qa.xlsx"
 ```
 
 导入会校验表头和枚举值。审核可用的数据设置为 `retrieval_enabled=true`；源工作簿没有
@@ -291,7 +291,7 @@ docker compose config --quiet
 
 ### 常见问题
 
-- `cs_qa` 为空：先执行 migration，再运行 `scripts/import_cleaned_qa.ps1`。
+- `cs_qa` 为空：这是清理后的安全状态；新增 QA 时执行 migration 并用新的已审核工作簿运行导入脚本。
 - Milvus schema incompatible：提升 `MILVUS_COLLECTION` 版本名后重新索引，不要复用旧表。
 - RAG 只给人工建议：检查校准文件的样本数和 Wilson 下界；这是默认安全行为。
 - 拼多多连接器未就绪：重新打开专用 Chrome 并确认已登录，不要复制 Cookie 到配置。

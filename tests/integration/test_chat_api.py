@@ -2,14 +2,20 @@ import httpx
 import pytest
 
 from app.api.dependencies import get_chat_service
-from app.schemas.chat import ChatResponse
+from app.core.exceptions import LLMInvocationError
+from app.schemas.chat import ChatRequest, ChatResponse
 from app.services.chat_service import ChatService
 from main import app
 
 
 class StubChatService:
-    async def chat(self, message: str) -> ChatResponse:
-        return ChatResponse(answer=f"已收到：{message}")
+    async def chat(self, request: ChatRequest) -> ChatResponse:
+        return ChatResponse(
+            conversation_id=request.conversation_id,
+            answer=f"已收到：{request.message}",
+            source="qa",
+            route="stub",
+        )
 
 
 @pytest.mark.asyncio
@@ -33,7 +39,18 @@ async def test_chat_api_returns_uniform_response() -> None:
     assert response.json() == {
         "code": 0,
         "message": "success",
-        "data": {"answer": "已收到：你好"},
+        "data": {
+            "conversation_id": None,
+            "answer": "已收到：你好",
+            "source": "qa",
+            "route": "stub",
+            "product": None,
+            "product_resolution": "none",
+            "rule_name": None,
+            "reason_code": None,
+            "confidence": None,
+            "sources": [],
+        },
     }
 
 
@@ -55,11 +72,11 @@ async def test_chat_api_rejects_blank_message() -> None:
 
 @pytest.mark.asyncio
 async def test_chat_api_hides_llm_traceback() -> None:
-    class BrokenLLM:
-        async def ainvoke(self, messages):
-            raise ConnectionError("private provider failure")
+    class BrokenChatService(ChatService):
+        async def chat(self, request: ChatRequest) -> ChatResponse:
+            raise LLMInvocationError()
 
-    app.dependency_overrides[get_chat_service] = lambda: ChatService(BrokenLLM())
+    app.dependency_overrides[get_chat_service] = lambda: BrokenChatService()
     try:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
@@ -81,6 +98,46 @@ async def test_chat_api_hides_llm_traceback() -> None:
         "data": None,
     }
     assert "private provider failure" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_chat_api_accepts_conversation_and_product_context() -> None:
+    class ProductStubService:
+        async def chat(self, request: ChatRequest) -> ChatResponse:
+            return ChatResponse(
+                conversation_id=request.conversation_id,
+                answer="适合日常跑步。",
+                source="product",
+                route="product",
+                product={"id": request.product_id, "name": "护膝"},
+                product_resolution="request",
+                confidence=0.98,
+            )
+
+    app.dependency_overrides[get_chat_service] = lambda: ProductStubService()
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            response = await client.post(
+                "/api/v1/chat",
+                json={
+                    "conversation_id": "c1",
+                    "product_id": "1001",
+                    "message": "适合跑步吗？",
+                    "service_stage": "pre_sale",
+                },
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["conversation_id"] == "c1"
+    assert data["source"] == "product"
+    assert data["product"] == {"id": "1001", "name": "护膝"}
+    assert data["product_resolution"] == "request"
 
 
 @pytest.mark.asyncio

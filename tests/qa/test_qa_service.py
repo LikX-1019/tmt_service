@@ -105,3 +105,26 @@ async def test_rag_uses_reviewed_standard_answer_when_generation_fails() -> None
     assert result.route == "rag"
     assert result.answer == "这是已审核的标准回答"
     assert result.decision_factors["generation_fallback"] is True
+
+
+@pytest.mark.asyncio
+async def test_empty_knowledge_returns_fallback_without_retrieval_or_llm() -> None:
+    retriever = AsyncMock()
+    reranker = AsyncMock()
+    generator = AsyncMock()
+    service = QAService(
+        FAQMatcher([]),
+        retriever,
+        reranker,
+        EvidenceChecker(0.5),
+        generator,
+        has_knowledge=False,
+    )
+
+    result = await service.answer("物流什么时候发货")
+
+    assert result.route == "fallback"
+    assert result.decision_factors == {"knowledge_base_empty": True}
+    retriever.retrieve.assert_not_awaited()
+    reranker.rerank.assert_not_awaited()
+    generator.generate.assert_not_awaited()

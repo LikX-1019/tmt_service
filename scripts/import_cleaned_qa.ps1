@@ -1,5 +1,5 @@
 param(
-    [string]$Source = "data\qa\整理结果\智能客服标准QA整理.xlsx"
+    [string]$Source = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,6 +13,9 @@ $tempSql = Join-Path $projectRoot ".codex-tmp\qa_import.sql"
 
 if (-not (Test-Path -LiteralPath $envFile)) {
     throw "Missing .env file: $envFile"
+}
+if ([string]::IsNullOrWhiteSpace($Source)) {
+    throw "Provide a reviewed QA workbook with -Source. The old JAFFICK dataset has been removed."
 }
 if (-not (Test-Path -LiteralPath $sourceFile)) {
     throw "Missing source workbook: $sourceFile"

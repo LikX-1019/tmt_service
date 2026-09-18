@@ -1,4 +1,4 @@
-"""第一版聊天接口，只负责参数接收、服务调用和统一响应封装。"""
+"""统一聊天接口，只负责参数接收、服务调用和响应封装。"""
 
 from typing import Annotated
 
@@ -18,6 +18,6 @@ async def chat(
     request: ChatRequest,
     service: Annotated[ChatService, Depends(get_chat_service)],
 ) -> ApiResponse[ChatResponse]:
-    """调用配置好的大模型，为用户消息生成客服回复。"""
-    response = await service.chat(request.message)
+    """由后端统一执行规则、商品和 QA 路由。"""
+    response = await service.chat(request)
     return ApiResponse(data=response)

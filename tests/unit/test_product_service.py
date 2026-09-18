@@ -6,7 +6,10 @@ from app.services.product_service import (
     HttpProductClient,
     ProductAnswer,
     ProductAnswerService,
+    ProductContextBuilder,
     ProductLookupError,
+    ProductNotFoundError,
+    ProductProfile,
 )
 
 
@@ -80,3 +83,28 @@ def test_product_auto_send_requires_every_safety_gate() -> None:
         settings=settings,
     )
     assert not ProductAnswerService.can_auto_send(safe, allow_auto=False, settings=settings)
+
+
+@pytest.mark.asyncio
+async def test_product_client_maps_published_404_to_not_found() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"detail": "商品不存在或尚未发布"})
+
+    settings = Settings(_env_file=None, product_api_base_url="https://products.example.test")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ProductNotFoundError, match="未找到对应商品"):
+            await HttpProductClient(settings, client).get_product("missing")
+
+
+def test_product_context_builder_only_outputs_real_non_empty_fields() -> None:
+    product = ProductProfile(
+        id="972793561880",
+        name="护腕",
+        summary="日常支撑。",
+        specifications={"材质": "锦纶"},
+    )
+    context = ProductContextBuilder.build(product)
+    assert "商品ID：\n972793561880" in context
+    assert "规格：\n- 材质：锦纶" in context
+    assert "使用方法" not in context
+    assert "适合场景" not in context

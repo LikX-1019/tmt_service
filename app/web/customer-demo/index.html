@@ -30,8 +30,8 @@
     </header>
 
     <div class="compatibility-banner" role="status">
-      <strong>当前使用规则前置 + 单轮 QA 兼容模式，多轮 State 尚未接入。</strong>
-      <span>确定性规则优先拦截；未命中 Terminal 的消息再调用 /api/v1/qa。页面会继续生成 Session / Message ID，为后续 RagChat 对接预留。</span>
+      <strong>当前使用统一 Chat API，由后端决定规则、商品与 QA 路由。</strong>
+      <span>Terminal Rule 优先；商品问题读取 PostgreSQL 商品资料并持久化会话绑定；非商品问题继续走 QA。</span>
     </div>
 
     <main class="demo-layout">
@@ -67,11 +67,11 @@
         <section class="panel-card">
           <div class="panel-title">
             <h2>当前咨询商品</h2>
-            <span>仅传 ID</span>
+            <span>显式请求，可选</span>
           </div>
           <form id="productForm" class="product-form">
             <label for="productId">商品 ID</label>
-            <input id="productId" name="product_id" value="P10086" maxlength="64" autocomplete="off" placeholder="P10086">
+            <input id="productId" name="product_id" value="" maxlength="64" autocomplete="off" placeholder="例如 972793561880">
             <fieldset>
               <legend>业务阶段 service_stage</legend>
               <div class="stage-options">
@@ -91,7 +91,7 @@
             </fieldset>
             <label for="legacyProductCode">QA 兼容 product_code（可选）</label>
             <input id="legacyProductCode" maxlength="64" autocomplete="off" placeholder="仅开发调试使用">
-            <p class="panel-note">product_id 保留未来语义；legacy 字段只服务于当前 QA 兼容层。</p>
+            <p class="panel-note">product_id 只表示本轮显式商品；后续绑定由后端 conversation 持久化。legacy 字段仅用于 QA 兼容调试。</p>
           </form>
         </section>
 
@@ -102,10 +102,11 @@
           </div>
           <label for="transportMode">当前模式</label>
           <select id="transportMode">
-            <option value="qa-compatibility" selected>QA compatibility + rule preflight</option>
-            <option value="rag-chat">future rag-chat（后端未接入）</option>
+            <option value="chat" selected>unified chat（推荐）</option>
+            <option value="qa-compatibility">QA compatibility + rule preflight（调试）</option>
+            <option value="rag-chat">future rag-chat（预留）</option>
           </select>
-          <p class="panel-note">Future RagChat 仅预留前端载荷结构，不表示后端已经可用。</p>
+          <p class="panel-note">统一 Chat 由后端路由；兼容模式仅保留用于对照调试，Future RagChat 继续预留。</p>
         </section>
       </aside>
 
@@ -116,7 +117,7 @@
             <p>小满客服 · 正在模拟真实消费者提问</p>
           </div>
           <div class="product-chip" aria-label="当前咨询商品">
-            <span id="currentProductChip">P10086</span>
+            <span id="currentProductChip">未指定商品</span>
             <em id="currentStageChip">售前</em>
           </div>
         </header>
@@ -141,13 +142,17 @@
           </div>
           <dl class="debug-list">
             <div><dt>session_id</dt><dd id="debugSessionId">-</dd></div>
+            <div><dt>conversation_id</dt><dd id="debugConversationId">-</dd></div>
             <div><dt>customer_id</dt><dd id="debugCustomerId">-</dd></div>
             <div><dt>input_message_id</dt><dd id="debugInputMessageId">-</dd></div>
             <div><dt>output_message_id</dt><dd id="debugOutputMessageId">-</dd></div>
             <div><dt>current_product_id</dt><dd id="debugProductId">-</dd></div>
             <div><dt>service_stage</dt><dd id="debugServiceStage">-</dd></div>
-            <div><dt>transport mode</dt><dd id="debugTransportMode">qa-compatibility</dd></div>
+            <div><dt>transport mode</dt><dd id="debugTransportMode">chat</dd></div>
+            <div><dt>source</dt><dd id="debugSource">-</dd></div>
             <div><dt>route</dt><dd id="debugRoute">-</dd></div>
+            <div><dt>product resolution</dt><dd id="debugProductResolution">-</dd></div>
+            <div><dt>rule</dt><dd id="debugRule">-</dd></div>
             <div><dt>confidence</dt><dd id="debugConfidence">-</dd></div>
             <div><dt>request_id</dt><dd id="debugRequestId">-</dd></div>
             <div><dt>latency</dt><dd id="debugLatency">-</dd></div>
@@ -167,6 +172,6 @@
   </div>
 
   <div id="panelScrim" class="panel-scrim" hidden></div>
-  <script src="/assets/customer-demo/app.js?v=3" defer></script>
+  <script src="/assets/customer-demo/app.js?v=4" defer></script>
 </body>
 </html>

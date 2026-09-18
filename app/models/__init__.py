@@ -1,6 +1,7 @@
 """数据库模型导出。"""
 
 from app.models.base import Base
+from app.models.chat import ChatConversationProduct
 from app.models.conversation import (
     AgentAccount,
     ConnectorEvent,
@@ -20,6 +21,7 @@ from app.models.knowledge import QAKnowledge
 
 __all__ = [
     "Base",
+    "ChatConversationProduct",
     "AgentAccount",
     "ConnectorEvent",
     "Conversation",
