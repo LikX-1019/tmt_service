@@ -22,6 +22,14 @@ async def chat_demo_page() -> FileResponse:
     return FileResponse(WEB_ROOT / "index.html", media_type="text/html")
 
 
+@router.get("/customer-demo", response_class=FileResponse)
+async def customer_demo_page() -> FileResponse:
+    """返回模拟真实电商客户聊天页面。"""
+    return FileResponse(
+        WEB_ROOT / "customer-demo" / "index.html", media_type="text/html"
+    )
+
+
 @router.get("/assets/console/{asset_name}", response_class=FileResponse)
 async def console_asset(asset_name: str) -> FileResponse:
     """仅公开控制台固定静态资源，避免任意路径读取。"""
@@ -31,6 +39,19 @@ async def console_asset(asset_name: str) -> FileResponse:
         raise HTTPException(status_code=404)
     media_type = "text/css" if asset_name.endswith(".css") else "text/javascript"
     return FileResponse(WEB_ROOT / "console" / asset_name, media_type=media_type)
+
+
+@router.get("/assets/customer-demo/{asset_name}", response_class=FileResponse)
+async def customer_demo_asset(asset_name: str) -> FileResponse:
+    """仅公开 Customer Demo 固定静态资源，避免任意路径读取。"""
+    if asset_name not in {"app.css", "app.js"}:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404)
+    media_type = "text/css" if asset_name.endswith(".css") else "text/javascript"
+    return FileResponse(
+        WEB_ROOT / "customer-demo" / asset_name, media_type=media_type
+    )
 
 
 @router.get("/qa-demo", response_class=FileResponse)

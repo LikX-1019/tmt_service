@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>小满客服 · 消费者聊天模拟器</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/assets/customer-demo/app.css?v=1">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">满</span>
+        <div>
+          <strong>小满客服</strong>
+          <small>消费者侧聊天模拟器</small>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <button type="button" class="ghost-button session-toggle" data-panel="session" aria-controls="sessionPanel" aria-expanded="false">
+          会话信息
+        </button>
+        <button type="button" class="ghost-button debug-toggle" data-panel="debug" aria-controls="debugPanel" aria-expanded="false">
+          调试信息
+        </button>
+        <button type="button" id="newSessionButton" class="primary-button">新建会话</button>
+      </div>
+    </header>
+
+    <div class="compatibility-banner" role="status">
+      <strong>当前使用单轮 QA 兼容模式，多轮 State 尚未接入。</strong>
+      <span>每条消息独立调用 /api/v1/qa；页面会继续生成 Session / Message ID，为后续 RagChat 对接预留。</span>
+    </div>
+
+    <main class="demo-layout">
+      <aside id="sessionPanel" class="session-panel" aria-label="会话与商品信息">
+        <section class="panel-card">
+          <div class="panel-title">
+            <h2>会话信息</h2>
+            <span>浏览器内存</span>
+          </div>
+          <dl class="id-list">
+            <div>
+              <dt>Session ID</dt>
+              <dd id="sessionId">-</dd>
+            </div>
+            <div>
+              <dt>Customer ID</dt>
+              <dd id="customerId">-</dd>
+            </div>
+          </dl>
+          <button type="button" id="resetSessionButton" class="secondary-button full-width">生成新 Session</button>
+          <p class="panel-note">点击后会清空聊天记录，并重新显示默认欢迎消息。</p>
+        </section>
+
+        <section class="panel-card">
+          <div class="panel-title">
+            <h2>当前咨询商品</h2>
+            <span>仅传 ID</span>
+          </div>
+          <form id="productForm" class="product-form">
+            <label for="productId">商品 ID</label>
+            <input id="productId" name="product_id" value="P10086" maxlength="64" autocomplete="off" placeholder="P10086">
+            <fieldset>
+              <legend>业务阶段 service_stage</legend>
+              <div class="stage-options">
+                <label>
+                  <input type="radio" name="serviceStage" value="pre_sale" checked>
+                  <span>售前</span>
+                </label>
+                <label>
+                  <input type="radio" name="serviceStage" value="post_sale">
+                  <span>售后</span>
+                </label>
+                <label>
+                  <input type="radio" name="serviceStage" value="general">
+                  <span>通用</span>
+                </label>
+              </div>
+            </fieldset>
+            <label for="legacyProductCode">QA 兼容 product_code（可选）</label>
+            <input id="legacyProductCode" maxlength="64" autocomplete="off" placeholder="仅开发调试使用">
+            <p class="panel-note">product_id 保留未来语义；legacy 字段只服务于当前 QA 兼容层。</p>
+          </form>
+        </section>
+
+        <section class="panel-card">
+          <div class="panel-title">
+            <h2>传输模式</h2>
+            <span>Transport</span>
+          </div>
+          <label for="transportMode">当前模式</label>
+          <select id="transportMode">
+            <option value="qa-compatibility" selected>QA compatibility</option>
+            <option value="rag-chat">future rag-chat（后端未接入）</option>
+          </select>
+          <p class="panel-note">Future RagChat 仅预留前端载荷结构，不表示后端已经可用。</p>
+        </section>
+      </aside>
+
+      <section class="chat-panel" aria-label="模拟客户聊天">
+        <header class="chat-header">
+          <div>
+            <h1>官方在线客服</h1>
+            <p>小满客服 · 正在模拟真实消费者提问</p>
+          </div>
+          <div class="product-chip" aria-label="当前咨询商品">
+            <span id="currentProductChip">P10086</span>
+            <em id="currentStageChip">售前</em>
+          </div>
+        </header>
+
+        <div id="messageList" class="message-list" aria-live="polite" aria-label="聊天消息"></div>
+
+        <form id="messageForm" class="composer">
+          <label class="sr-only" for="messageInput">输入客户消息</label>
+          <textarea id="messageInput" rows="3" maxlength="2000" placeholder="请输入 customer 消息，例如：这个护膝适合跑步吗？" autocomplete="off"></textarea>
+          <div class="composer-actions">
+            <span id="sendState">Enter 发送 · Shift + Enter 换行</span>
+            <button id="sendButton" type="submit" class="primary-button">发送</button>
+          </div>
+        </form>
+      </section>
+
+      <aside id="debugPanel" class="debug-panel" aria-label="开发者调试信息">
+        <section class="panel-card">
+          <div class="panel-title">
+            <h2>开发者调试</h2>
+            <span>真实返回值</span>
+          </div>
+          <dl class="debug-list">
+            <div><dt>session_id</dt><dd id="debugSessionId">-</dd></div>
+            <div><dt>customer_id</dt><dd id="debugCustomerId">-</dd></div>
+            <div><dt>input_message_id</dt><dd id="debugInputMessageId">-</dd></div>
+            <div><dt>output_message_id</dt><dd id="debugOutputMessageId">-</dd></div>
+            <div><dt>current_product_id</dt><dd id="debugProductId">-</dd></div>
+            <div><dt>service_stage</dt><dd id="debugServiceStage">-</dd></div>
+            <div><dt>transport mode</dt><dd id="debugTransportMode">qa-compatibility</dd></div>
+            <div><dt>route</dt><dd id="debugRoute">-</dd></div>
+            <div><dt>confidence</dt><dd id="debugConfidence">-</dd></div>
+            <div><dt>request_id</dt><dd id="debugRequestId">-</dd></div>
+            <div><dt>latency</dt><dd id="debugLatency">-</dd></div>
+          </dl>
+        </section>
+        <section class="panel-card">
+          <div class="panel-title">
+            <h2>Sources</h2>
+            <span id="sourceCount">-</span>
+          </div>
+          <ul id="sourceList" class="source-list">
+            <li class="empty-value">-</li>
+          </ul>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <div id="panelScrim" class="panel-scrim" hidden></div>
+  <script src="/assets/customer-demo/app.js?v=1" defer></script>
+</body>
+</html>

@@ -38,7 +38,7 @@ build-backend = "setuptools.build_meta"
 py-modules = ["main"]
 
 [tool.setuptools.package-data]
-app = ["web/*.html", "web/console/*.html", "web/console/*.css", "web/console/*.js"]
+app = ["web/*.html", "web/console/*.html", "web/console/*.css", "web/console/*.js", "web/customer-demo/*.html", "web/customer-demo/*.css", "web/customer-demo/*.js"]
 
 [tool.setuptools.packages.find]
 include = ["app*"]
