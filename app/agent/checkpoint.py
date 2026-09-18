@@ -62,10 +62,12 @@ class FileCheckpointStore:
             persisted.revision += 1
             persisted.updated_at = utcnow()
             persisted.checkpoint_reason = reason
+            persisted.sync_contract_state()
             await asyncio.to_thread(self._write_atomic, persisted)
             state.revision = persisted.revision
             state.updated_at = persisted.updated_at
             state.checkpoint_reason = persisted.checkpoint_reason
+            state.sync_contract_state()
             return state
 
     async def load(self, run_id: str) -> AgentState | None:
