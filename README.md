@@ -85,15 +85,20 @@ Windows 首次导入 `langchain-openai` 较慢时阻塞 FastAPI 事件循环。
 
 ## 启动
 
-先启动数据服务并执行数据库迁移：
+先启动数据服务，再分别升级 MySQL 与商品 PostgreSQL：
 
 ```powershell
-docker compose up -d mysql etcd minio milvus
+uv run python scripts/dev_compose.py up -d mysql product-postgres etcd minio milvus commodity-management
 uv run alembic upgrade head
+uv run python scripts/upgrade_product_postgres.py
+uv run python scripts/upgrade_product_postgres.py --check
 ```
 
-Alembic 是所有正式表（包括 `cs_qa`、会话、消息、发送任务和审计事件）的唯一 schema
-来源。全新数据库和现有开发库都使用同一条迁移链，不通过应用启动时 `create_all()` 建表。
+Alembic 只管理 MySQL，包括 `chat_conversation_products`、`cs_qa`、会话、消息、发送任务
+和审计事件。商品主数据及 `product_api_profiles` 位于独立 PostgreSQL；全新数据库使用
+init SQL，已有数据库必须执行 `upgrade_product_postgres.py`。Milvus 只保存 QA vectors。
+完整部署顺序及多 worktree 隔离方式见
+[`docs/数据库升级与多Worktree开发.md`](docs/数据库升级与多Worktree开发.md)。
 
 旧 JAFFICK QA 数据已失效并移除。首次迁移后如需重建 QA，先参考 `docs/QA清空与重建.md` 清理旧环境，再导入新的已审核工作簿：
 
@@ -287,6 +292,7 @@ Remove-Item Env:DATABASE_URL
 
 ```powershell
 docker compose config --quiet
+uv run python scripts/dev_compose.py info
 ```
 
 ### 常见问题

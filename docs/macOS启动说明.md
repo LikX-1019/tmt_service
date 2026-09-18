@@ -1,7 +1,7 @@
 # macOS 本地启动说明
 
-项目在 macOS 上采用两部分运行：MySQL、etcd、MinIO、Milvus 和 Attu 由 Docker
-Compose 管理；FastAPI 应用使用项目根目录的 `.venv` 在宿主机运行。
+项目在 macOS 上采用两部分运行：MySQL、商品 PostgreSQL、商品管理服务、etcd、MinIO、
+Milvus 和 Attu 由 Docker Compose 管理；FastAPI 应用使用项目根目录的 `.venv` 在宿主机运行。
 
 ## 首次准备
 
@@ -20,8 +20,8 @@ uv sync --frozen
 检查 Compose 配置并拉取固定版本镜像：
 
 ```sh
-docker compose config --quiet
-docker compose pull
+uv run python scripts/dev_compose.py config --quiet
+uv run python scripts/dev_compose.py pull
 ```
 
 项目数据保存在 `data/docker/`，Docker 镃像磁盘保存在
@@ -32,14 +32,16 @@ docker compose pull
 先启动全部基础服务，并等待健康检查完成：
 
 ```sh
-docker compose up -d
-docker compose ps
+uv run python scripts/dev_compose.py up -d
+uv run python scripts/dev_compose.py ps
 ```
 
 首次使用或数据库迁移文件有变化时执行：
 
 ```sh
 uv run alembic upgrade head
+uv run python scripts/upgrade_product_postgres.py
+uv run python scripts/upgrade_product_postgres.py --check
 ```
 
 然后启动 FastAPI：
@@ -72,13 +74,14 @@ PDD_CHROME_PROFILE_DIR=./data/runtime/pdd-chrome
 查看容器状态：
 
 ```sh
-docker compose ps
+uv run python scripts/dev_compose.py ps
+uv run python scripts/dev_compose.py info
 ```
 
 查看基础服务日志：
 
 ```sh
-docker compose logs --tail 100
+uv run python scripts/dev_compose.py logs --tail 100
 ```
 
 FastAPI 日志同时写入项目的 `logs/` 目录。应用健康检查返回
@@ -89,14 +92,16 @@ FastAPI 日志同时写入项目的 `logs/` 目录。应用健康检查返回
 在运行 FastAPI 的终端按 `Ctrl+C` 停止应用。停止基础服务但保留容器和数据：
 
 ```sh
-docker compose stop
+uv run python scripts/dev_compose.py stop
 ```
 
-下次可使用 `docker compose start` 再次启动已有容器。若要删除容器和网络但保留
+下次可使用 `uv run python scripts/dev_compose.py start` 再次启动已有容器。若要删除容器和网络但保留
 `data/docker/` 中的数据，可执行：
 
 ```sh
-docker compose down
+uv run python scripts/dev_compose.py down
 ```
 
-不要删除 `data/docker/`；其中保存 MySQL、etcd、MinIO 和 Milvus 的持久化数据。
+不要执行 `down -v`，也不要删除 `data/docker/`；其中保存 MySQL、商品 PostgreSQL、
+etcd、MinIO 和 Milvus 的持久化数据。多 worktree 与端口配置见
+[`数据库升级与多Worktree开发.md`](数据库升级与多Worktree开发.md)。

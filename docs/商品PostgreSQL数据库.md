@@ -5,23 +5,34 @@
 
 ## 启动
 
-先在 `.env` 中设置强密码，再启动容器：
+先在 `.env` 中设置强密码，再通过 worktree helper 启动容器：
 
 ```sh
-docker compose pull product-postgres
-docker compose up -d product-postgres
-docker compose ps product-postgres
+uv run python scripts/dev_compose.py pull product-postgres
+uv run python scripts/dev_compose.py up -d product-postgres
+uv run python scripts/dev_compose.py ps product-postgres
 ```
 
 首次创建数据目录时，PostgreSQL 会自动执行
-`docker/product-postgres/init/001_product_catalog.sql`。该脚本创建：
+`docker/product-postgres/init/001_product_catalog.sql` 和
+`002_product_api_profile_fields.sql`。前者创建主表，后者引用共享 SQL
+`docker/product-postgres/sql/product_api_profiles.sql` 创建 API view：
 
 - `products`：商品主资料，主键 `id` 必须使用平台商品卡片的 `goods_id`。
 - `product_variants`：SKU、规格组合、价格及库存。
 - `product_api_profiles`：只暴露已发布商品，并与现有商品 API 字段保持一致。
 
-初始化脚本只会在空数据目录首次启动时执行。以后修改结构应通过正式迁移脚本处理，
-不要删除数据目录来重新初始化。
+初始化脚本只会在空数据目录首次启动时执行。已有数据库必须运行正式升级脚本；升级和
+首次初始化共用同一份 view definition，不要删除数据目录来触发初始化：
+
+```sh
+uv run python scripts/upgrade_product_postgres.py
+uv run python scripts/upgrade_product_postgres.py --check
+```
+
+默认命令幂等执行 `CREATE OR REPLACE VIEW`，随后从 PostgreSQL catalog 验证 view 类型及
+当前代码需要的字段集合。`--check` 只连接和验证，不修改数据库。两个命令只输出环境、
+host、port 和 database，不输出密码或完整 DSN；缺少任一 required field 时以非零状态退出。
 
 ## 连接
 
@@ -29,7 +40,7 @@ docker compose ps product-postgres
 
 ```text
 Host: 127.0.0.1
-Port: PRODUCT_POSTGRES_PORT，默认 5432
+Port: PRODUCT_POSTGRES_PORT，默认 5432（应与 PRODUCT_POSTGRES_HOST_PORT 一致）
 Database: PRODUCT_POSTGRES_DB，默认 product_catalog
 User: PRODUCT_POSTGRES_USER，默认 product_catalog
 Password: PRODUCT_POSTGRES_PASSWORD
@@ -38,7 +49,7 @@ Password: PRODUCT_POSTGRES_PASSWORD
 也可以直接进入容器：
 
 ```sh
-docker compose exec product-postgres sh -lc \
+uv run python scripts/dev_compose.py exec product-postgres sh -lc \
   'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
 ```
 
@@ -74,7 +85,7 @@ SELECT * FROM product_api_profiles WHERE id = '972793561880';
 ## 备份
 
 ```sh
-docker compose exec -T product-postgres sh -lc \
+uv run python scripts/dev_compose.py exec -T product-postgres sh -lc \
   'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
   > product_catalog.sql
 ```

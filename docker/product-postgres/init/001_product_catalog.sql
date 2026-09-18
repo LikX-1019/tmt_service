@@ -73,23 +73,7 @@ CREATE TRIGGER trg_product_variants_updated_at
 BEFORE UPDATE ON product_variants
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
-CREATE OR REPLACE VIEW product_api_profiles AS
-SELECT
-    id,
-    name,
-    summary,
-    selling_points,
-    specifications,
-    usage,
-    suitable_for,
-    warnings,
-    after_sales_limits,
-    updated_at
-FROM products
-WHERE status = 'published';
-
 COMMENT ON TABLE products IS '运营维护的商品主资料，id 使用平台商品 goods_id';
 COMMENT ON TABLE product_variants IS '商品 SKU、价格和库存资料';
-COMMENT ON VIEW product_api_profiles IS '供现有商品 API 返回的已发布商品字段';
 
 COMMIT;
