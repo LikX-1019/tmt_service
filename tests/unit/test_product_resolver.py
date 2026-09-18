@@ -11,6 +11,9 @@ from app.services.product_resolver import ProductResolver
         ("product id: 1001", "1001"),
         ("商品ID：972793561880", "972793561880"),
         ("商品 1001 怎么样", "1001"),
+        ("TEST-WRIST-001 这个商品你能给我介绍一下吗", "TEST-WRIST-001"),
+        ("1001 适合跑步吗", "1001"),
+        ("TEST-WRIST-001", "TEST-WRIST-001"),
     ],
 )
 def test_extract_supported_product_id_formats(message: str, expected: str) -> None:
@@ -19,6 +22,8 @@ def test_extract_supported_product_id_formats(message: str, expected: str) -> No
 
 def test_extract_rejects_ordinary_product_words_as_id() -> None:
     assert ProductResolver.extract_from_message("这个商品是什么材料") is None
+    assert ProductResolver.extract_from_message("iphone16 有什么特点") is None
+    assert ProductResolver.extract_from_message("2026 年什么时候发货") is None
 
 
 def test_resolve_prefers_request_then_message_then_conversation() -> None:

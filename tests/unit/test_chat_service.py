@@ -197,6 +197,22 @@ async def test_message_product_id_binds_conversation() -> None:
     assert qa.calls == 0
 
 
+async def test_leading_bare_product_id_binds_conversation() -> None:
+    service, _, _, qa, conversations = make_service()
+
+    result = await service.chat(
+        ChatRequest(
+            conversation_id="c1",
+            message="1001 这个商品你能给我介绍一下吗",
+        )
+    )
+
+    assert result.product_resolution == "message_id"
+    assert result.source == "product"
+    assert conversations.values["c1"] == ("1001", "护腕")
+    assert qa.calls == 0
+
+
 async def test_follow_up_uses_bound_product_without_new_id() -> None:
     service, products, answers, _, _ = make_service()
     await service.chat(

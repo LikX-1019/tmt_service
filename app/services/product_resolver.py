@@ -22,6 +22,9 @@ _MESSAGE_ID_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(rf"(?:product[_ ]?id|商品\s*id)\s*[:：=]?\s*({_ID})", re.IGNORECASE),
     re.compile(rf"商品(?:\s+|[:：]\s*)({_ID})", re.IGNORECASE),
 )
+_LEADING_BARE_ID_PATTERN = re.compile(
+    rf"^\s*({_ID})(?=\s|[，,。.！!？?:：；;]|$)"
+)
 _SEARCH_PREFIXES = (
     "我想问一下",
     "我想看看",
@@ -64,6 +67,7 @@ _QUESTION_MARKERS = (
     "不合适",
     "适合",
 )
+_BARE_ID_CONTEXT_MARKERS = (*_QUESTION_MARKERS, "商品", "产品", "介绍", "详情", "价格", "多少钱")
 _GENERIC_WORDS = ("这个", "那个", "这款", "那款", "这种", "这样一种", "它", "该", "商品", "产品")
 _PRONOUN_PRODUCT_PREFIXES = (
     "那这个商品",
@@ -143,6 +147,21 @@ class ProductResolver:
             match = pattern.search(message)
             if match:
                 return cls._normalize_id(match.group(1))
+
+        match = _LEADING_BARE_ID_PATTERN.match(message)
+        if match:
+            candidate = match.group(1)
+            remainder = _normalize_text(message[match.end() :])
+            looks_like_id = (
+                candidate.isdigit()
+                or any(separator in candidate for separator in "._:-")
+                or any("A" <= character <= "Z" for character in candidate)
+            )
+            if looks_like_id and (
+                not remainder
+                or any(marker in remainder for marker in _BARE_ID_CONTEXT_MARKERS)
+            ):
+                return cls._normalize_id(candidate)
         return None
 
     @staticmethod
