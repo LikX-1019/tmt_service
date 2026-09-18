@@ -116,6 +116,18 @@ uv run uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 
 健康检查：`GET /health`。
 
+默认 `CONSOLE_ENABLED=true`，会保留原多店控制台行为并恢复需要在线的 PDD
+Chrome 窗口。开发或调试独立 QA/RAG 链路时可设置：
+
+```powershell
+$env:CONSOLE_ENABLED="false"
+uv run uvicorn main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+此时不会实例化 `ShopRuntimeManager`、`ConsoleRuntime`、PDD Connector 或 Chrome；
+`/health`、`/api/v1/qa` 与 `/qa-demo` 继续可用，Console 相关 API 返回
+`503 CONSOLE_UNAVAILABLE`。控制台页面保留，重新设置 `CONSOLE_ENABLED=true` 并重启即可。
+
 客服控制台：启动服务后访问 `http://127.0.0.1:8000/`。页面无需安装 Node.js 或
 执行前端构建。原聊天测试页移动到 `http://127.0.0.1:8000/chat-demo`。
 

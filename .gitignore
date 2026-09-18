@@ -53,6 +53,7 @@ outputs/
 data/docker/
 data/backup/
 data/runtime/
+data/message-assets/
 
 # Generated spreadsheet inspection artifacts
 *.inspect.ndjson

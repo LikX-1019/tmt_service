@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     default_tenant_id: str = "tenant_default"
     default_shop_name: str = "拼多多店铺"
 
+    # Console / PDD is an optional local channel adapter. The default preserves
+    # the existing hosted-console startup behavior for current deployments.
+    console_enabled: bool = True
+
     pdd_chat_url: str = "https://mms.pinduoduo.com/chat-merchant/index.html"
     pdd_chrome_executable: Path | None = None
     pdd_chrome_profile_dir: Path = PROJECT_ROOT / "data" / "runtime" / "pdd-chrome"
@@ -285,6 +289,7 @@ class Settings(BaseSettings):
             "llm_model": self.llm_model,
             "llm_temperature": self.llm_temperature,
             "llm_warmup_on_startup": self.llm_warmup_on_startup,
+            "console_enabled": self.console_enabled,
             "pdd_chat_url": self.pdd_chat_url,
             "pdd_chrome_profile_dir": str(self.pdd_chrome_profile_dir),
             "pdd_chrome_profile_root": str(self.pdd_chrome_profile_root),

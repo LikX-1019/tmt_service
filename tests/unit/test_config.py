@@ -102,6 +102,21 @@ def test_model_route_falls_back_to_default() -> None:
     assert settings.model_for("response") == "default-model"
 
 
+def test_console_enabled_defaults_true_and_can_be_disabled(monkeypatch) -> None:
+    monkeypatch.delenv("CONSOLE_ENABLED", raising=False)
+    assert Settings(_env_file=None).console_enabled is True
+
+    monkeypatch.setenv("CONSOLE_ENABLED", "false")
+    settings = Settings(_env_file=None)
+    assert settings.console_enabled is False
+    assert settings.safe_summary()["console_enabled"] is False
+
+
+def test_console_enabled_rejects_invalid_values() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, console_enabled="not-a-boolean")
+
+
 def test_safe_summary_does_not_expose_secrets() -> None:
     settings = Settings(
         _env_file=None,

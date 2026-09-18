@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>商品资料管理</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <section id="loginView" class="login-view">
+    <div class="login-panel">
+      <div class="brand-mark" aria-hidden="true"><i data-lucide="package-search"></i></div>
+      <p class="eyebrow">COMMODITY OPERATIONS</p>
+      <h1>商品资料管理</h1>
+      <p class="login-subtitle">登录后维护商品事实、规格、客服话术边界与 SKU 库存。</p>
+      <form id="loginForm" class="login-form">
+        <label>
+          <span>用户名</span>
+          <input id="loginUsername" name="username" autocomplete="username" required autofocus>
+        </label>
+        <label>
+          <span>密码</span>
+          <div class="password-field">
+            <input id="loginPassword" name="password" type="password" autocomplete="current-password" required>
+            <button id="togglePassword" class="icon-button inline-icon" type="button" title="显示密码" aria-label="显示密码">
+              <i data-lucide="eye"></i>
+            </button>
+          </div>
+        </label>
+        <p id="loginError" class="form-error" role="alert"></p>
+        <button class="primary-button full-button" type="submit">
+          <i data-lucide="log-in"></i><span>登录管理系统</span>
+        </button>
+      </form>
+    </div>
+  </section>
+
+  <div id="appView" class="app-view" hidden>
+    <header class="topbar">
+      <div class="brand-lockup">
+        <div class="brand-mark small" aria-hidden="true"><i data-lucide="package-search"></i></div>
+        <div><strong>商品资料管理</strong><span>Product catalog</span></div>
+      </div>
+      <div class="topbar-actions">
+        <span class="service-state"><span class="state-dot"></span>数据库已连接</span>
+        <span id="currentUser" class="current-user"></span>
+        <button id="logoutButton" class="icon-button" type="button" title="退出登录" aria-label="退出登录">
+          <i data-lucide="log-out"></i>
+        </button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <div class="page-heading">
+        <div><p class="eyebrow">CATALOG</p><h1>商品库</h1><p>统一维护客服可引用的商品资料和 SKU 信息</p></div>
+        <div class="heading-actions">
+          <button id="batchImportButton" class="secondary-button" type="button">
+            <i data-lucide="sheet"></i><span>Excel 批量导入</span>
+          </button>
+          <button id="createProductButton" class="primary-button" type="button">
+            <i data-lucide="plus"></i><span>新建商品</span>
+          </button>
+        </div>
+      </div>
+
+      <section class="metrics" aria-label="商品统计">
+        <div><span>全部商品</span><strong id="metricTotal">0</strong></div>
+        <div><span>已发布</span><strong id="metricPublished">0</strong></div>
+        <div><span>草稿</span><strong id="metricDraft">0</strong></div>
+        <div><span>已下线</span><strong id="metricOffline">0</strong></div>
+        <div><span>SKU 总数</span><strong id="metricVariants">0</strong></div>
+      </section>
+
+      <section class="catalog-surface">
+        <div class="toolbar">
+          <label class="search-box">
+            <i data-lucide="search"></i>
+            <input id="searchInput" type="search" placeholder="搜索商品 ID、名称或内部编码">
+          </label>
+          <label class="select-control">
+            <span>状态</span>
+            <select id="statusFilter">
+              <option value="all">全部状态</option>
+              <option value="published">已发布</option>
+              <option value="draft">草稿</option>
+              <option value="offline">已下线</option>
+            </select>
+          </label>
+          <button id="refreshButton" class="icon-button bordered" type="button" title="刷新列表" aria-label="刷新列表">
+            <i data-lucide="refresh-cw"></i>
+          </button>
+        </div>
+
+        <div id="tableLoading" class="table-state"><span class="spinner"></span>正在读取商品资料</div>
+        <div id="emptyState" class="empty-state" hidden>
+          <i data-lucide="package-open"></i><strong>暂无匹配商品</strong><span>调整筛选条件，或新建第一件商品。</span>
+        </div>
+        <div id="tableWrap" class="table-wrap" hidden>
+          <table>
+            <thead><tr><th>商品</th><th>平台 / 内部编码</th><th>状态</th><th>SKU</th><th>负责人</th><th>更新时间</th><th class="actions-column">操作</th></tr></thead>
+            <tbody id="productTableBody"></tbody>
+          </table>
+        </div>
+        <footer id="pagination" class="pagination" hidden>
+          <span id="paginationSummary"></span>
+          <div>
+            <button id="previousPage" class="icon-button bordered" type="button" title="上一页" aria-label="上一页"><i data-lucide="chevron-left"></i></button>
+            <span id="pageNumber"></span>
+            <button id="nextPage" class="icon-button bordered" type="button" title="下一页" aria-label="下一页"><i data-lucide="chevron-right"></i></button>
+          </div>
+        </footer>
+      </section>
+    </main>
+  </div>
+
+  <div id="drawerBackdrop" class="drawer-backdrop" hidden></div>
+  <aside id="editorGuide" class="editor-guide" hidden aria-label="商品资料填写指南">
+        <header class="editor-guide-header">
+          <span class="guide-summary-icon"><i data-lucide="book-open-text"></i></span>
+          <span><strong>商品资料填写指南</strong><small>逐字段说明与完整示例，运营可直接参照填写</small></span>
+          <button id="closeGuideButton" class="icon-button mobile-guide-close" type="button" aria-label="关闭填写指南"><i data-lucide="x"></i></button>
+        </header>
+        <div class="guide-content">
+          <div class="guide-callout">
+            <i data-lucide="circle-help"></i>
+            <p><strong>示例商品：JAFFICK 运动护腕支架 Pro</strong><span>带“必填”的字段不能为空。商品先保存为草稿，资料审核完成后再改为“已发布”；只有已发布商品会提供给客服回答。</span></p>
+          </div>
+
+          <div class="guide-grid">
+            <section class="guide-card guide-card-wide">
+              <header><span>01</span><div><h3>基础信息</h3><p>确认客服正在回答哪一个商品</p></div></header>
+              <div class="guide-table-wrap"><table class="guide-table">
+                <thead><tr><th>字段</th><th>怎么填写</th><th>示例</th></tr></thead>
+                <tbody>
+                  <tr><td>平台商品 ID <em>必填</em></td><td>填写平台商品卡片中的 <code>goods_id</code>，创建后不可修改；不能填写内部 SKU。</td><td><code>972793561880</code></td></tr>
+                  <tr><td>内部商品编码</td><td>填写公司内部用于识别该商品的唯一编码，没有可暂时留空。</td><td><code>BG07</code></td></tr>
+                  <tr><td>平台</td><td>选择商品实际销售平台。当前拼多多客服商品请选择“拼多多”。</td><td>拼多多</td></tr>
+                  <tr><td>资料状态</td><td>编辑中选“草稿”；审核完成选“已发布”；不再销售或资料失效选“已下线”。</td><td>已发布</td></tr>
+                  <tr><td>商品名称 <em>必填</em></td><td>填写消费者看到的完整名称，包含品牌、品类和关键型号，避免只写简称。</td><td>JAFFICK 运动护腕支架 Pro</td></tr>
+                  <tr><td>品牌</td><td>填写商品包装或平台页面公示的品牌名称。</td><td>JAFFICK</td></tr>
+                  <tr><td>型号</td><td>填写包装、说明书或内部资料中一致的产品型号。</td><td>BG07 Pro</td></tr>
+                  <tr><td>类目</td><td>按“一级类目 / 二级类目 / 三级类目”描述，便于运营搜索和归类。</td><td>运动户外 / 运动护具 / 护腕</td></tr>
+                  <tr><td>商品简介 <em>必填</em></td><td>用 1～3 句话说明商品是什么、用于什么场景。只写可核实事实，不写“百分百有效”等承诺。</td><td>用于日常运动及办公场景下的手腕支撑，采用可调节绑带设计。</td></tr>
+                </tbody>
+              </table></div>
+            </section>
+
+            <section class="guide-card">
+              <header><span>02</span><div><h3>客服资料</h3><p>客服回答商品问题的直接依据</p></div></header>
+              <dl class="guide-list">
+                <div><dt>核心卖点</dt><dd>每行一条，最多 30 条。示例：<code>三段式可调节绑带</code>、<code>左右手均可佩戴</code>、<code>透气面料</code>。</dd></div>
+                <div><dt>使用方法</dt><dd>按实际顺序写清安装、佩戴、调节和清洁。示例：松开绑带，将拇指穿过固定孔，调整至舒适松紧度后粘合。</dd></div>
+                <div><dt>适用人群 / 场景</dt><dd>同时写适用对象和使用场景。示例：适合日常运动、办公及一般手腕支撑需求。</dd></div>
+                <div><dt>注意事项</dt><dd>填写禁忌、异常处理和不能替代的专业用途。示例：出现麻木、红肿或疼痛加重时立即停止使用。</dd></div>
+                <div><dt>售后限制</dt><dd>写清拆封、使用、污染或定制商品的退换边界。示例：已使用或污染的贴身类商品不支持无理由退换。</dd></div>
+              </dl>
+            </section>
+
+            <section class="guide-card">
+              <header><span>03</span><div><h3>商品规格</h3><p>一行填写一个“规格名称 + 规格值”</p></div></header>
+              <div class="guide-spec-example">
+                <div><span>规格名称</span><span>规格值</span></div>
+                <div><code>颜色</code><code>黑色</code></div>
+                <div><code>尺码</code><code>均码</code></div>
+                <div><code>材质</code><code>锦纶、聚酯纤维、氨纶</code></div>
+                <div><code>适用部位</code><code>手腕</code></div>
+                <div><code>包装清单</code><code>护腕 1 只、说明书 1 份</code></div>
+              </div>
+              <p class="guide-note"><i data-lucide="info"></i><span>数值必须带单位，例如写“长度 35 cm”，不要只写“35”；不同款式有差异时，应分别建立 SKU。</span></p>
+            </section>
+
+            <section class="guide-card">
+              <header><span>04</span><div><h3>发布管理</h3><p>记录资料责任人与合规审核</p></div></header>
+              <dl class="guide-list">
+                <div><dt>资料负责人</dt><dd>负责补充和更新资料的运营人员。示例：<code>张琳</code>。</dd></div>
+                <div><dt>审核人</dt><dd>确认商品事实、宣传口径与风险提示的审核人员。示例：<code>李明</code>。</dd></div>
+                <div><dt>生效时间</dt><dd>资料口径开始适用的时间。活动或换版资料应准确填写。</dd></div>
+                <div><dt>发布时间</dt><dd>商品资料正式允许客服使用的时间，通常与状态改为“已发布”的时间一致。</dd></div>
+                <div><dt>合规备注</dt><dd>填写资质依据和禁用表述。示例：不得描述为治疗产品，不得承诺治愈或永久改善。</dd></div>
+              </dl>
+            </section>
+
+            <section class="guide-card guide-card-wide">
+              <header><span>05</span><div><h3>SKU、价格与库存</h3><p>商品首次保存后，在“规格与 SKU”中添加</p></div></header>
+              <div class="guide-table-wrap"><table class="guide-table">
+                <thead><tr><th>字段</th><th>怎么填写</th><th>示例</th></tr></thead>
+                <tbody>
+                  <tr><td>SKU ID <em>必填</em></td><td>填写平台或内部系统中唯一且稳定的 SKU 编码，创建后不可修改。</td><td><code>BG07-BLACK-M</code></td></tr>
+                  <tr><td>SKU 名称 <em>必填</em></td><td>使用顾客容易理解的规格组合名称。</td><td>黑色 / M 码</td></tr>
+                  <tr><td>价格</td><td>填写当前标准销售价，只填数字，系统默认人民币；暂不确定可留空。</td><td><code>69.90</code></td></tr>
+                  <tr><td>库存数量</td><td>填写可售库存的非负整数；没有可靠实时数据时留空，不要猜测。</td><td><code>25</code></td></tr>
+                  <tr><td>库存状态</td><td>根据可售情况选择“未知、有货、库存紧张、缺货”。</td><td>有货</td></tr>
+                  <tr><td>SKU 状态</td><td>正常销售选“启用”；停产、不可售或资料作废选“停用”。</td><td>启用</td></tr>
+                  <tr><td>规格属性</td><td>每行填写一项，格式为“名称=值”，用于描述此 SKU 与其他 SKU 的区别。</td><td><code>颜色=黑色</code><br><code>尺码=M</code></td></tr>
+                </tbody>
+              </table></div>
+            </section>
+          </div>
+        </div>
+  </aside>
+  <aside id="productDrawer" class="drawer" aria-hidden="true" aria-labelledby="drawerTitle">
+    <header class="drawer-header">
+      <div><p id="drawerEyebrow" class="eyebrow">NEW PRODUCT</p><h2 id="drawerTitle">新建商品</h2></div>
+      <div class="drawer-header-actions">
+        <button id="toggleGuideButton" class="secondary-button compact guide-toggle-button" type="button"><i data-lucide="book-open-text"></i><span>填写指南</span></button>
+        <button id="closeDrawerButton" class="icon-button" type="button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button>
+      </div>
+    </header>
+    <nav class="form-tabs" aria-label="商品编辑分区">
+      <button class="form-tab active" type="button" data-tab="basic">基础信息</button>
+      <button class="form-tab" type="button" data-tab="content">客服资料</button>
+      <button class="form-tab" type="button" data-tab="specs">规格与 SKU</button>
+      <button class="form-tab" type="button" data-tab="governance">发布管理</button>
+    </nav>
+    <form id="productForm" class="drawer-form">
+      <section class="tab-panel active" data-panel="basic">
+        <div class="form-grid">
+          <label><span>平台商品 ID <em>*</em></span><input id="productId" maxlength="64" required placeholder="例如 972793561880"><small>必须与客服商品卡片的 goods_id 一致</small></label>
+          <label><span>内部商品编码</span><input id="internalCode" maxlength="64" placeholder="例如 BG07"></label>
+          <label><span>平台</span><select id="platform"><option value="pdd">拼多多</option><option value="jd">京东</option><option value="taobao">淘宝 / 天猫</option><option value="other">其他</option></select></label>
+          <label><span>资料状态</span><select id="productStatus"><option value="draft">草稿</option><option value="published">已发布</option><option value="offline">已下线</option></select></label>
+          <label class="span-2"><span>商品名称 <em>*</em></span><input id="productName" maxlength="500" required></label>
+          <label><span>品牌</span><input id="brand" maxlength="200"></label>
+          <label><span>型号</span><input id="model" maxlength="200"></label>
+          <label class="span-2"><span>类目</span><input id="categoryName" maxlength="500" placeholder="例如 运动户外 / 运动护具 / 护腕"></label>
+          <label class="span-2"><span>商品简介 <em>*</em></span><textarea id="summary" maxlength="4000" rows="5" required placeholder="填写客服可直接引用的事实性简介"></textarea><small><span id="summaryCount">0</span> / 4000</small></label>
+        </div>
+      </section>
+
+      <section class="tab-panel" data-panel="content">
+        <div class="form-grid single-column">
+          <label><span>核心卖点</span><textarea id="sellingPoints" rows="5" placeholder="每行一个卖点，最多 30 条"></textarea></label>
+          <label><span>使用方法</span><textarea id="usage" maxlength="4000" rows="5"></textarea></label>
+          <label><span>适用人群 / 场景</span><textarea id="suitableFor" maxlength="2000" rows="4"></textarea></label>
+          <label><span>注意事项</span><textarea id="warnings" maxlength="2000" rows="4"></textarea></label>
+          <label><span>售后限制</span><textarea id="afterSalesLimits" maxlength="2000" rows="4"></textarea></label>
+        </div>
+      </section>
+
+      <section class="tab-panel" data-panel="specs">
+        <div class="section-heading"><div><h3>商品规格</h3><p>用于回答材质、尺寸、包装清单等问题</p></div><button id="addSpecButton" class="secondary-button" type="button"><i data-lucide="plus"></i><span>添加规格</span></button></div>
+        <div id="specRows" class="key-value-list"></div>
+        <div class="section-heading sku-heading"><div><h3>SKU 列表</h3><p id="skuHint">保存商品后可维护 SKU</p></div><button id="addVariantButton" class="secondary-button" type="button" disabled><i data-lucide="plus"></i><span>添加 SKU</span></button></div>
+        <div id="variantEmpty" class="inline-empty">暂无 SKU</div>
+        <div id="variantTableWrap" class="compact-table-wrap" hidden>
+          <table><thead><tr><th>SKU</th><th>规格</th><th>价格</th><th>库存</th><th>状态</th><th></th></tr></thead><tbody id="variantTableBody"></tbody></table>
+        </div>
+      </section>
+
+      <section class="tab-panel" data-panel="governance">
+        <div class="form-grid">
+          <label><span>资料负责人</span><input id="ownerName" maxlength="100"></label>
+          <label><span>审核人</span><input id="reviewedBy" maxlength="100"></label>
+          <label><span>生效时间</span><input id="effectiveAt" type="datetime-local"></label>
+          <label><span>发布时间</span><input id="publishedAt" type="datetime-local"></label>
+          <label class="span-2"><span>合规备注</span><textarea id="complianceNotes" rows="7" placeholder="填写禁用表述、资质依据或审核说明"></textarea></label>
+        </div>
+      </section>
+      <p id="productFormError" class="form-error drawer-error" role="alert"></p>
+      <footer class="drawer-footer">
+        <button id="cancelProductButton" class="secondary-button" type="button">取消</button>
+        <button id="saveProductButton" class="primary-button" type="submit"><i data-lucide="save"></i><span>保存商品</span></button>
+      </footer>
+    </form>
+  </aside>
+
+  <dialog id="importDialog" class="modal import-modal">
+    <form id="importForm" method="dialog">
+      <header><div><p class="eyebrow">BATCH IMPORT</p><h2>Excel 批量导入</h2></div><button id="closeImportButton" class="icon-button" type="button" aria-label="关闭"><i data-lucide="x"></i></button></header>
+      <div class="import-body">
+        <ol class="import-steps">
+          <li><span>1</span><div><strong>下载模板</strong><p>商品导入表每行一件商品；示例和字段说明在独立工作表中。</p></div><a class="secondary-button" href="/api/import/template"><i data-lucide="download"></i>下载 Excel 模板</a></li>
+          <li><span>2</span><div><strong>填写并保存</strong><p>不要修改工作表名称和表头；已有商品 ID 会更新，新的商品 ID 会新增。</p></div></li>
+          <li><span>3</span><div><strong>上传校验</strong><p>整份文件先校验；有错误时不会写入数据库，并会显示具体工作表和行号。</p></div></li>
+        </ol>
+        <label id="importDropzone" class="import-dropzone" for="importFile">
+          <input id="importFile" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
+          <i data-lucide="file-spreadsheet"></i>
+          <strong id="importFileName">选择或拖入 .xlsx 文件</strong>
+          <span>单个文件不超过 5 MB，最多 1000 件商品</span>
+        </label>
+        <div id="importResult" class="import-result" hidden></div>
+        <p id="importError" class="form-error" role="alert"></p>
+      </div>
+      <footer><button id="cancelImportButton" class="secondary-button" type="button">取消</button><button id="submitImportButton" class="primary-button" type="submit" disabled><i data-lucide="upload"></i><span>开始导入</span></button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="variantDialog" class="modal">
+    <form id="variantForm" method="dialog">
+      <header><div><p class="eyebrow">SKU</p><h2 id="variantDialogTitle">添加 SKU</h2></div><button id="closeVariantButton" class="icon-button" type="button" aria-label="关闭"><i data-lucide="x"></i></button></header>
+      <div class="modal-body form-grid">
+        <label><span>SKU ID <em>*</em></span><input id="skuId" maxlength="64" required></label>
+        <label><span>SKU 名称 <em>*</em></span><input id="skuName" maxlength="500" required></label>
+        <label><span>价格</span><div class="input-prefix"><span>¥</span><input id="skuPrice" type="number" min="0" step="0.01"></div></label>
+        <label><span>库存数量</span><input id="stockQuantity" type="number" min="0" step="1"></label>
+        <label><span>库存状态</span><select id="stockStatus"><option value="unknown">未知</option><option value="in_stock">有货</option><option value="low_stock">库存紧张</option><option value="out_of_stock">缺货</option></select></label>
+        <label><span>SKU 状态</span><select id="variantStatus"><option value="active">启用</option><option value="inactive">停用</option></select></label>
+        <label class="span-2"><span>规格属性</span><textarea id="variantAttributes" rows="4" placeholder="每行一个，例如：颜色=黑色"></textarea></label>
+      </div>
+      <p id="variantFormError" class="form-error modal-error" role="alert"></p>
+      <footer><button id="cancelVariantButton" class="secondary-button" type="button">取消</button><button class="primary-button" type="submit"><i data-lucide="save"></i><span>保存 SKU</span></button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="confirmDialog" class="modal confirm-modal">
+    <div class="danger-icon"><i data-lucide="trash-2"></i></div>
+    <h2 id="confirmTitle">删除商品</h2>
+    <p id="confirmMessage"></p>
+    <footer><button id="cancelConfirmButton" class="secondary-button" type="button">取消</button><button id="confirmDeleteButton" class="danger-button" type="button">确认删除</button></footer>
+  </dialog>
+
+  <div id="toastRegion" class="toast-region" aria-live="polite"></div>
+  <script src="/static/vendor/lucide.js"></script>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

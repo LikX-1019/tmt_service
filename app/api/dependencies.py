@@ -8,6 +8,7 @@ from functools import lru_cache
 from fastapi import Request
 
 from app.core.config import get_settings
+from app.core.exceptions import ConsoleUnavailableError
 from app.qa.answer_generator import QAAnswerGenerator
 from app.qa.catalog import load_catalog
 from app.qa.evidence_checker import EvidenceChecker
@@ -20,7 +21,6 @@ from app.rag.retrieval.reranker import BGEReranker
 from app.services.chat_service import ChatService
 from app.services.console_runtime import ConsoleRuntime
 from app.services.shop_runtime_manager import ShopRuntimeManager
-
 
 _qa_service: QAService | None = None
 _qa_service_lock = asyncio.Lock()
@@ -70,6 +70,8 @@ def get_shop_runtime_manager(
     runtime = getattr(request.app.state, "console_runtime", None)
     if runtime is not None:
         return _LegacyRuntimeManager(runtime)
+    if getattr(request.app.state, "console_enabled", True) is False:
+        raise ConsoleUnavailableError("客服控制台未启用")
     raise RuntimeError("店铺运行时尚未初始化")
 
 

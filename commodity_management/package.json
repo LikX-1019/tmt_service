@@ -1,0 +1,8 @@
+{
+  "name": "commodity-management-assets",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "lucide": "0.468.0"
+  }
+}
