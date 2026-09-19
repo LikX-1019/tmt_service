@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from app.rules.base import BaseRule, RuleContext, RuleDecision
 
 
@@ -13,6 +15,19 @@ _PRODUCT_REFERENCES = (
     "这种",
     "这个",
     "它",
+    "他",
+    "刚刚那个",
+    "刚刚这个",
+    "刚刚说的",
+    "刚才那个",
+    "前面那个",
+    "前面说的",
+)
+_PRODUCT_SWITCH_PATTERN = re.compile(r"^那.{2,30}呢$")
+_PRODUCT_ATTRIBUTE_PATTERN = re.compile(
+    r"(?:几个|有哪些|什么|最大|最小).{0,4}(?:型号|尺码|码)"
+    r"|型号|尺码|(?:有|有吗|有没有)[\s]*[smlxyz]",
+    re.IGNORECASE,
 )
 _PRODUCT_QUESTION_HINTS = (
     "不合适",
@@ -32,6 +47,10 @@ _PRODUCT_QUESTION_HINTS = (
     "多久",
     "尺寸",
     "多大",
+    "型号",
+    "尺码",
+    "有哪些码",
+    "几个码",
     "材质",
     "规格",
     "颜色",
@@ -53,6 +72,9 @@ class ProductContextRule(BaseRule):
         has_reference = any(reference in message for reference in _PRODUCT_REFERENCES)
         has_product_question = any(
             hint in message for hint in _PRODUCT_QUESTION_HINTS
+        ) or bool(
+            _PRODUCT_ATTRIBUTE_PATTERN.search(message)
+            or _PRODUCT_SWITCH_PATTERN.search(message)
         )
         has_bound_product = context.current_product_id is not None
         if not has_product_question or not (has_reference or has_bound_product):

@@ -1,7 +1,11 @@
 import pytest
 
 from app.core.config import Settings
-from app.services.product_resolver import ProductResolver
+from app.services.product_resolver import (
+    ConversationProductReference,
+    ProductResolution,
+    ProductResolver,
+)
 
 
 @pytest.mark.parametrize(
@@ -94,3 +98,65 @@ def test_external_url_is_not_treated_as_a_product_identifier() -> None:
     assert result.product_id is None
     assert result.source == "none"
     assert resolver.has_url("https://external.example/products/1001")
+
+
+def test_attribute_questions_keep_current_or_explicit_product() -> None:
+    resolver = ProductResolver()
+    assert resolver.resolve(
+        request_product_id=None,
+        message="他有几个型号",
+        conversation_product_id="TEST-WRIST-001",
+    ).source == "conversation"
+    assert resolver.resolve(
+        request_product_id=None,
+        message="TEST-WRIST-001 这个护腕他有几个型号啊",
+        conversation_product_id=None,
+    ).product_id == "TEST-WRIST-001"
+    assert resolver.resolve(
+        request_product_id=None,
+        message="TEST-WRIST-001 他有l",
+        conversation_product_id=None,
+    ).product_id == "TEST-WRIST-001"
+
+
+def test_historical_reference_resolves_named_recent_product() -> None:
+    resolver = ProductResolver()
+    recent = [
+        ConversationProductReference("TEST-BOTTLE-002", "测试商品-运动水壶"),
+        ConversationProductReference("TEST-WRIST-001", "测试商品-运动护腕"),
+    ]
+
+    result = resolver.resolve(
+        request_product_id=None,
+        message="刚刚那个护腕他有几个型号啊",
+        conversation_product_id="TEST-BOTTLE-002",
+        recent_products=recent,
+    )
+
+    assert result == ProductResolution("TEST-WRIST-001", "history")
+
+
+def test_short_switch_reference_resolves_named_recent_product() -> None:
+    resolver = ProductResolver()
+    recent = [
+        ConversationProductReference("TEST-WRIST-001", "测试商品-运动护腕"),
+        ConversationProductReference("TEST-BOTTLE-002", "测试商品-运动水壶"),
+    ]
+
+    result = resolver.resolve(
+        request_product_id=None,
+        message="那水壶呢",
+        conversation_product_id="TEST-WRIST-001",
+        recent_products=recent,
+    )
+
+    assert result == ProductResolution("TEST-BOTTLE-002", "history")
+
+
+def test_question_tail_is_not_treated_as_product_name() -> None:
+    assert (
+        ProductResolver.extract_name_query(
+            "这个运动护腕我能使用吗", product_intent=True
+        )
+        == "运动护腕"
+    )

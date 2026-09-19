@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 from app.agent.chat_runtime import ChatStateRuntime
@@ -23,7 +23,7 @@ from app.schemas.chat import (
     ChatResponse,
     ChatSourceView,
 )
-from app.services.product_resolver import ProductResolver
+from app.services.product_resolver import ConversationProductReference, ProductResolver
 from app.services.product_service import (
     ProductAnswer,
     ProductAnswerService,
@@ -136,12 +136,14 @@ class ChatService:
                 confidence=terminal.confidence,
             )
 
+        recent_products = self._recent_products(binding)
         resolution = self._product_resolver.resolve(
             request_product_id=request.product_id,
             message=request.message,
             conversation_product_id=binding.product_id if binding else None,
+            recent_products=recent_products,
         )
-        explicit_product = resolution.source in {"request", "url", "message_id"}
+        explicit_product = resolution.source in {"request", "url", "message_id", "history"}
         name_query = None
         if not explicit_product:
             name_query = self._product_resolver.extract_name_query(
@@ -154,6 +156,7 @@ class ChatService:
                 name_query,
                 rule_result,
                 state,
+                recent_products=recent_products,
             )
             if name_response is not None:
                 return name_response
@@ -219,7 +222,11 @@ class ChatService:
         except ProductLookupError as exc:
             raise ProductServiceUnavailableError() from exc
 
-        await self._bind_product(request.conversation_id, product)
+        await self._bind_product(
+            request.conversation_id,
+            product,
+            recent_products=recent_products,
+        )
         self._state_runtime.record_product_resolved(
             state,
             product,
@@ -242,13 +249,50 @@ class ChatService:
             return None
         return await self._conversations.get_binding(conversation_id)
 
-    async def _bind_product(self, conversation_id: str | None, product: ProductProfile) -> None:
+    @staticmethod
+    def _recent_products(
+        binding: ChatConversationProduct | None,
+    ) -> list[ConversationProductReference]:
+        references: list[ConversationProductReference] = []
+        seen: set[str] = set()
+
+        def add(product_id: str | None, product_name: str | None) -> None:
+            normalized_id = (product_id or "").strip()
+            normalized_name = (product_name or "").strip()
+            if not normalized_id or not normalized_name or normalized_id in seen:
+                return
+            seen.add(normalized_id)
+            references.append(
+                ConversationProductReference(
+                    product_id=normalized_id,
+                    product_name=normalized_name,
+                )
+            )
+
+        if binding is not None:
+            add(binding.product_id, binding.product_name)
+            for product in getattr(binding, "recent_products", None) or []:
+                if isinstance(product, dict):
+                    add(product.get("product_id"), product.get("product_name"))
+        return references[:5]
+
+    async def _bind_product(
+        self,
+        conversation_id: str | None,
+        product: ProductProfile,
+        *,
+        recent_products: Sequence[ConversationProductReference] | None = None,
+    ) -> None:
         if not conversation_id or self._conversations is None:
             return
         await self._conversations.bind_product(
             conversation_id,
             product_id=product.id,
             product_name=product.name,
+            recent_products=[
+                {"product_id": item.product_id, "product_name": item.product_name}
+                for item in (recent_products or [])
+            ],
         )
 
     async def _clear_binding_if_present(self, conversation_id: str | None) -> None:
@@ -294,6 +338,8 @@ class ChatService:
         query: str,
         rule_result: Any,
         state: AgentState,
+        *,
+        recent_products: Sequence[ConversationProductReference] | None = None,
     ) -> ChatResponse | None:
         assert self._products is not None
         try:
@@ -312,8 +358,18 @@ class ChatService:
 
         exact = [candidate for candidate in candidates if candidate.match_type == "exact"]
         if len(exact) == 1:
+            selected = exact[0]
+            resolution_source = "name_exact"
+        elif not exact and len(candidates) == 1:
+            selected = candidates[0]
+            resolution_source = "name_unique_contains"
+        else:
+            selected = None
+            resolution_source = "name_candidates"
+
+        if selected is not None:
             try:
-                product = await self._products.get_product_by_id(exact[0].id)
+                product = await self._products.get_product_by_id(selected.id)
             except ProductNotFoundError:
                 return ChatResponse(
                     conversation_id=request.conversation_id,
@@ -325,11 +381,15 @@ class ChatService:
                 )
             except ProductLookupError as exc:
                 raise ProductServiceUnavailableError() from exc
-            await self._bind_product(request.conversation_id, product)
+            await self._bind_product(
+                request.conversation_id,
+                product,
+                recent_products=recent_products,
+            )
             self._state_runtime.record_product_resolved(
                 state,
                 product,
-                source="name_exact",
+                source=resolution_source,
             )
             try:
                 answer = await self._product_answers.answer(
@@ -345,7 +405,7 @@ class ChatService:
                 request,
                 product,
                 answer,
-                "name_exact",
+                resolution_source,
                 rule_result,
             )
 
@@ -354,7 +414,7 @@ class ChatService:
             answer="找到多个可能的商品，请选择您咨询的商品。",
             source="product_selection",
             route="product_selection",
-            product_resolution="name_candidates",
+            product_resolution=resolution_source,
             rule_name=self._matched_product_rule(rule_result),
             products=[
                 ChatProductCandidateView(

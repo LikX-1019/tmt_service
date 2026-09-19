@@ -32,3 +32,42 @@ async def test_conversation_product_binding_can_be_cleared(repository) -> None:
     await repository.bind_product("c1", product_id="1001", product_name="护腕")
     await repository.clear_binding("c1")
     assert await repository.get_binding("c1") is None
+
+
+def _history(product_id: str, product_name: str) -> dict[str, str]:
+    return {"product_id": product_id, "product_name": product_name}
+
+
+@pytest.mark.asyncio
+async def test_conversation_product_history_persists_recent_products(repository) -> None:
+    await repository.bind_product(
+        "c1", product_id="1001", product_name="护腕", recent_products=[]
+    )
+    binding = await repository.get_binding("c1")
+    assert binding.recent_products == []
+
+    await repository.bind_product(
+        "c1",
+        product_id="2002",
+        product_name="护膝",
+        recent_products=[_history("1001", "护腕")],
+    )
+    binding = await repository.get_binding("c1")
+
+    assert (binding.product_id, binding.product_name) == ("2002", "护膝")
+    assert binding.recent_products == [_history("1001", "护腕")]
+
+    await repository.bind_product(
+        "c1",
+        product_id="1001",
+        product_name="护腕",
+        recent_products=[
+            _history("2002", "护膝"),
+            _history("1001", "护腕"),
+        ],
+    )
+    binding = await repository.get_binding("c1")
+    assert binding.recent_products == [
+        _history("2002", "护膝"),
+        _history("1001", "护腕"),
+    ]

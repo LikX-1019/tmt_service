@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
+from collections.abc import Sequence
 from urllib.parse import parse_qs, urlparse
 
 from app.core.config import Settings, get_settings
@@ -14,6 +15,14 @@ from app.core.config import Settings, get_settings
 class ProductResolution:
     product_id: str | None
     source: str
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationProductReference:
+    """最近会话商品的轻量引用，只用于历史商品消歧。"""
+
+    product_id: str
+    product_name: str
 
 
 _ID = r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}"
@@ -38,6 +47,19 @@ _SEARCH_PREFIXES = (
     "请问",
     "咨询",
 )
+_SIZE_ATTRIBUTE_PATTERN = re.compile(
+    r"(?:几个|有哪些|什么|最大|最小).{0,4}(?:型号|尺码|码)"
+    r"|型号|尺码|(?:有|有吗|有没有)[\s]*[smlxyz]",
+    re.IGNORECASE,
+)
+_HISTORICAL_REFERENCE_PATTERN = re.compile(
+    r"刚刚|刚才|前面|之前|上次|^那.{2,30}呢$"
+)
+_QUESTION_TAIL_PATTERN = re.compile(r"(?:我)?(?:能|可以|想要|想|要)$")
+_ATTRIBUTE_ONLY_QUERY_PATTERN = re.compile(
+    r"(?:有|没有|几|个|哪些|什么|最大|最小|怎么|为什么|型号|尺码|码|[smlxyz])+",
+    re.IGNORECASE,
+)
 _QUESTION_MARKERS = (
     "有什么区别",
     "有什么功能",
@@ -57,6 +79,13 @@ _QUESTION_MARKERS = (
     "多久",
     "尺寸",
     "多大",
+    "型号",
+    "尺码",
+    "有哪些码",
+    "几个码",
+    "最大码",
+    "最小码",
+    "大码",
     "材质",
     "规格",
     "颜色",
@@ -68,7 +97,26 @@ _QUESTION_MARKERS = (
     "适合",
 )
 _BARE_ID_CONTEXT_MARKERS = (*_QUESTION_MARKERS, "商品", "产品", "介绍", "详情", "价格", "多少钱")
-_GENERIC_WORDS = ("这个", "那个", "这款", "那款", "这种", "这样一种", "它", "该", "商品", "产品")
+_GENERIC_WORDS = (
+    "刚刚那个",
+    "刚刚这个",
+    "刚刚说的",
+    "刚才那个",
+    "前面那个",
+    "前面说的",
+    "这个",
+    "那个",
+    "这款",
+    "那款",
+    "这种",
+    "这样一种",
+    "它",
+    "他",
+    "该",
+    "商品",
+    "产品",
+)
+_GENERIC_NAME_PARTS = {"这个", "那个", "这款", "那款", "这种", "它", "他", "该", "商品", "产品"}
 # Duration follow-ups such as “一天戴多久” contain a time expression, not a product name.
 _GENERIC_DURATION_QUERY = re.compile(
     r"(?:每天|每次|平时|平常|通常|一般|长期|连续)?"
@@ -163,12 +211,39 @@ class ProductResolver:
                 or any(separator in candidate for separator in "._:-")
                 or any("A" <= character <= "Z" for character in candidate)
             )
-            if looks_like_id and (
-                not remainder
-                or any(marker in remainder for marker in _BARE_ID_CONTEXT_MARKERS)
-            ):
+            contextual_remainder = any(
+                marker in remainder for marker in _BARE_ID_CONTEXT_MARKERS
+            ) or bool(_SIZE_ATTRIBUTE_PATTERN.search(remainder))
+            if looks_like_id and (not remainder or contextual_remainder):
                 return cls._normalize_id(candidate)
         return None
+
+    @staticmethod
+    def _historical_product_id(
+        message: str,
+        recent_products: Sequence[ConversationProductReference],
+    ) -> str | None:
+        """从最近商品中解析“刚刚那个护腕”这类明确回指。"""
+        if not recent_products or not _HISTORICAL_REFERENCE_PATTERN.search(message):
+            return None
+        normalized_message = _normalize_text(message)
+        matched_ids: list[str] = []
+        descriptors: list[str] = []
+        for candidate in recent_products:
+            name = _normalize_text(candidate.product_name)
+            descriptor: str | None = None
+            for size in range(min(len(name), len(normalized_message)), 1, -1):
+                for start in range(0, len(name) - size + 1):
+                    part = name[start : start + size]
+                    if part in normalized_message and part not in _GENERIC_NAME_PARTS:
+                        descriptor = part
+                        break
+                if descriptor is not None:
+                    break
+            if descriptor is not None and candidate.product_id not in matched_ids:
+                matched_ids.append(candidate.product_id)
+                descriptors.append(descriptor)
+        return matched_ids[0] if len(matched_ids) == 1 else None
 
     @staticmethod
     def extract_name_query(message: str, *, product_intent: bool) -> str | None:
@@ -200,8 +275,13 @@ class ProductResolver:
                 normalized = normalized[len(word) :].strip()
             if normalized.endswith(word):
                 normalized = normalized[: -len(word)].strip()
-        normalized = normalized.strip("的了呢吧啊")
-        if not normalized or len(normalized) < 2 or normalized in _GENERIC_WORDS:
+        normalized = _QUESTION_TAIL_PATTERN.sub("", normalized).strip("的了呢吧啊吗")
+        if (
+            not normalized
+            or len(normalized) < 2
+            or normalized in _GENERIC_WORDS
+            or _ATTRIBUTE_ONLY_QUERY_PATTERN.fullmatch(normalized)
+        ):
             return None
         if re.fullmatch(r"[?？。，,.!！:：;；~～]+", normalized):
             return None
@@ -219,6 +299,7 @@ class ProductResolver:
         request_product_id: str | None,
         message: str,
         conversation_product_id: str | None,
+        recent_products: Sequence[ConversationProductReference] = (),
     ) -> ProductResolution:
         request_id = self._normalize_id(request_product_id)
         if request_id is not None:
@@ -229,6 +310,9 @@ class ProductResolver:
         message_id = self.extract_from_message(message)
         if message_id is not None:
             return ProductResolution(message_id, "message_id")
+        historical_id = self._historical_product_id(message, recent_products)
+        if historical_id is not None:
+            return ProductResolution(historical_id, "history")
         conversation_id = self._normalize_id(conversation_product_id)
         if conversation_id is not None:
             return ProductResolution(conversation_id, "conversation")

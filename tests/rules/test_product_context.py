@@ -43,3 +43,32 @@ def test_metadata_reports_missing_current_product() -> None:
 
     assert decision.matched is True
     assert decision.metadata == {"current_product_available": False}
+
+
+def test_attribute_short_questions_use_current_product_context() -> None:
+    for message in ("他有几个型号", "他有l", "有M吗", "有哪些码", "最大码是什么"):
+        decision = ProductContextRule().evaluate(
+            message, RuleContext(current_product_id="TEST-WRIST-001")
+        )
+
+        assert decision.matched is True
+        assert decision.requires_product is True
+
+
+def test_short_product_switch_requires_product() -> None:
+    decision = ProductContextRule().evaluate(
+        "那水壶呢", RuleContext(current_product_id="TEST-WRIST-001")
+    )
+
+    assert decision.matched is True
+    assert decision.requires_product is True
+
+
+def test_historical_product_reference_requires_product() -> None:
+    decision = ProductContextRule().evaluate(
+        "刚刚那个护腕他有几个型号啊",
+        RuleContext(current_product_id="TEST-BOTTLE-002"),
+    )
+
+    assert decision.matched is True
+    assert decision.requires_product is True

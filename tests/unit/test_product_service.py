@@ -1,3 +1,5 @@
+from typing import Any
+
 import httpx
 import pytest
 
@@ -153,3 +155,46 @@ async def test_product_client_searches_published_profiles_with_limit() -> None:
         )
     ]
     assert seen == {"path": "/products", "query": "query=%E8%BF%90%E5%8A%A8%E6%8A%A4%E8%86%9D&limit=5"}
+
+
+class PromptCaptureLLM:
+    def __init__(self) -> None:
+        self.messages: list[Any] = []
+
+    async def ainvoke(self, messages: list[Any]) -> ProductAnswer:
+        self.messages = messages
+        return ProductAnswer(
+            answer="这款护腕有 S、M、L 三个尺码，型号为 WRIST-BASIC。",
+            facts_supported=True,
+            contains_sensitive_or_after_sales=False,
+            needs_clarification=False,
+            confidence=0.98,
+        )
+
+
+@pytest.mark.asyncio
+async def test_product_prompt_includes_structured_size_and_model_facts() -> None:
+    llm = PromptCaptureLLM()
+    product = ProductProfile(
+        id="TEST-WRIST-001",
+        name="测试商品-运动护腕",
+        summary="运动支撑。",
+        model="WRIST-BASIC",
+        specifications={"尺码": "S、M、L"},
+        usage="训练前佩戴。",
+        warnings="皮肤不适时停用。",
+    )
+
+    answer = await ProductAnswerService(llm).answer(
+        "他有几个型号", product, conversation_id="c1"
+    )
+
+    assert answer.facts_supported is True
+    system_prompt = llm.messages[0].content
+    user_prompt = llm.messages[1].content
+    assert "商品型号与尺码是不同概念" in system_prompt
+    assert "默认指向" in system_prompt
+    assert "WRIST-BASIC" in user_prompt
+    assert "规格：" + "\n" + "- 尺码：S、M、L" in user_prompt
+    assert "当前会话已绑定商品 TEST-WRIST-001" in user_prompt
+    assert "Current User Message：" + "\n" + "他有几个型号" in user_prompt

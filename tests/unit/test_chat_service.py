@@ -23,20 +23,36 @@ pytestmark = pytest.mark.asyncio
 class FakeConversations:
     def __init__(self) -> None:
         self.values: dict[str, tuple[str, str]] = {}
+        self.histories: dict[str, list[dict[str, str]]] = {}
 
     async def get_binding(self, conversation_id: str) -> Any:
         value = self.values.get(conversation_id)
         if value is None:
             return None
-        return type("Binding", (), {"product_id": value[0], "product_name": value[1]})()
+        return type(
+            "Binding",
+            (),
+            {
+                "product_id": value[0],
+                "product_name": value[1],
+                "recent_products": self.histories.get(conversation_id, []),
+            },
+        )()
 
     async def bind_product(
-        self, conversation_id: str, *, product_id: str, product_name: str
+        self,
+        conversation_id: str,
+        *,
+        product_id: str,
+        product_name: str,
+        recent_products: list[dict[str, str]] | None = None,
     ) -> None:
         self.values[conversation_id] = (product_id, product_name)
+        self.histories[conversation_id] = list(recent_products or [])
 
     async def clear_binding(self, conversation_id: str) -> None:
         self.values.pop(conversation_id, None)
+        self.histories.pop(conversation_id, None)
 
 
 class FakeProducts:
@@ -436,3 +452,152 @@ async def test_product_provider_failure_is_explicitly_unavailable() -> None:
             ChatRequest(conversation_id="c1", message="这个怎么样", product_id="1001")
         )
     assert qa.calls == 0
+
+
+def _wrist_and_bottle_products() -> FakeProducts:
+    return FakeProducts(
+        {
+            "TEST-WRIST-001": ProductProfile(
+                id="TEST-WRIST-001",
+                name="测试商品-运动护腕",
+                summary="运动支撑。",
+                specifications={"尺码": "S、M、L"},
+            ),
+            "TEST-BOTTLE-002": ProductProfile(
+                id="TEST-BOTTLE-002",
+                name="测试商品-运动水壶",
+                summary="运动补水。",
+            ),
+        }
+    )
+
+
+async def test_product_attribute_followups_keep_bound_product() -> None:
+    service, _, answers, qa, _ = make_service(products=_wrist_and_bottle_products())
+
+    first = await service.chat(
+        ChatRequest(conversation_id="c1", message="TEST-WRIST-001 介绍一下")
+    )
+    followups = [
+        "他有几个型号",
+        "有M吗",
+        "有哪些码",
+        "最大码是什么",
+        "商品型号是什么",
+        "怎么使用",
+        "有什么注意事项",
+        "他有l",
+        "他有L码的吗",
+    ]
+
+    for message in followups:
+        response = await service.chat(ChatRequest(conversation_id="c1", message=message))
+        assert response.route == "product"
+        assert response.product is not None
+        assert response.product.id == "TEST-WRIST-001"
+        assert response.product_resolution == "conversation"
+
+    assert first.route == "product"
+    assert answers.calls == ["TEST-WRIST-001"] * (len(followups) + 1)
+    assert qa.calls == 0
+
+
+async def test_direct_sku_attribute_question_reaches_product_facts() -> None:
+    service, _, answers, qa, _ = make_service(products=_wrist_and_bottle_products())
+
+    response = await service.chat(
+        ChatRequest(
+            conversation_id="c1",
+            message="TEST-WRIST-001 这个护腕他有几个型号啊",
+        )
+    )
+
+    assert response.route == "product"
+    assert response.product is not None
+    assert response.product.id == "TEST-WRIST-001"
+    assert response.product_resolution == "message_id"
+    assert answers.calls == ["TEST-WRIST-001"]
+    assert qa.calls == 0
+
+
+async def test_historical_product_reference_recovers_previous_product() -> None:
+    service, _, answers, qa, conversations = make_service(
+        products=_wrist_and_bottle_products()
+    )
+
+    await service.chat(
+        ChatRequest(conversation_id="c1", message="TEST-WRIST-001 介绍一下")
+    )
+    await service.chat(
+        ChatRequest(conversation_id="c1", message="TEST-BOTTLE-002 介绍一下这个")
+    )
+    response = await service.chat(
+        ChatRequest(
+            conversation_id="c1",
+            message="刚刚那个护腕他有几个型号啊",
+        )
+    )
+    followup = await service.chat(
+        ChatRequest(conversation_id="c1", message="刚刚那个护腕还有L吗")
+    )
+    bottle = await service.chat(ChatRequest(conversation_id="c1", message="那水壶呢"))
+
+    assert response.route == "product"
+    assert response.product is not None
+    assert response.product.id == "TEST-WRIST-001"
+    assert response.product_resolution == "history"
+    assert followup.product is not None
+    assert followup.product.id == "TEST-WRIST-001"
+    assert bottle.route == "product"
+    assert bottle.product is not None
+    assert bottle.product.id == "TEST-BOTTLE-002"
+    assert answers.calls == [
+        "TEST-WRIST-001",
+        "TEST-BOTTLE-002",
+        "TEST-WRIST-001",
+        "TEST-WRIST-001",
+        "TEST-BOTTLE-002",
+    ]
+    assert qa.calls == 0
+    assert conversations.values["c1"] == (
+        "TEST-BOTTLE-002",
+        "测试商品-运动水壶",
+    )
+
+
+async def test_unique_name_contains_match_binds_product() -> None:
+    service, _, answers, qa, _ = make_service(products=_wrist_and_bottle_products())
+
+    response = await service.chat(
+        ChatRequest(conversation_id="c1", message="这个运动护腕我能使用吗")
+    )
+
+    assert response.route == "product"
+    assert response.product is not None
+    assert response.product.id == "TEST-WRIST-001"
+    assert response.product_resolution == "name_unique_contains"
+    assert answers.calls == ["TEST-WRIST-001"]
+    assert qa.calls == 0
+
+
+async def test_multiple_name_contains_matches_require_selection() -> None:
+    products = FakeProducts(
+        {
+            "wrist-basic": ProductProfile(
+                id="wrist-basic", name="运动护腕 标准版", summary="标准支撑。"
+            ),
+            "wrist-pro": ProductProfile(
+                id="wrist-pro", name="运动护腕 专业版", summary="专业支撑。"
+            ),
+        }
+    )
+    service, _, answers, _, _ = make_service(products=products)
+
+    response = await service.chat(
+        ChatRequest(conversation_id="c1", message="这个运动护腕我能使用吗")
+    )
+
+    assert response.route == "product_selection"
+    assert response.product_resolution == "name_candidates"
+    assert len(response.products) == 2
+    assert answers.calls == []

@@ -13,6 +13,8 @@ ProductResolutionSource = Literal[
     "url",
     "message_id",
     "name_exact",
+    "name_unique_contains",
+    "history",
     "name_candidates",
     "conversation",
     "none",
