@@ -392,57 +392,6 @@ rg -n -F '"request_id": "req-123"' logs
 `rg` 默认输出文件名和行号。若需要上下文，可追加 `-C 3`；若只查错误文件，可将目标限定为
 `logs/${LOG_DATE}/error.log`。
 
-## 每日工作总结功能
-
-每日工作总结会扫描 `WORKLOG_WORKSPACE_ROOTS` 中的 Git 仓库，读取当天 `00:00` 到
-`17:40`（`Asia/Shanghai`）的提交、staged diff、unstaged diff 和未跟踪文件；随后按
-规则/商品、Agent、RAG、数据库、API、前端、测试和文档等工作模块聚类，并调用项目统一
-LLM Factory 的 `summarize` 模型生成中文日报。LLM 只接收预处理后的文件路径、提交主题、
-shortstat 和变更来源，不接收整个仓库；输出不符合编号格式时回退到基于证据的确定性摘要。
-如果未配置 `LLM_API_KEY` 或模型调用失败，也会继续生成不编造测试结果的日报。
-
-手动立即生成：
-
-```bash
-uv run python scripts/generate_daily_worklog.py
-```
-
-指定日期：
-
-```bash
-uv run python scripts/generate_daily_worklog.py --date 2026-09-19
-```
-
-macOS 当前用户安装 launchd 定时任务：
-
-```bash
-uv run python scripts/generate_daily_worklog.py --install-launchd
-```
-
-任务标签为 `com.tmt.daily-worklog`，配置写入
-`~/Library/LaunchAgents/com.tmt.daily-worklog.plist`，每天 `17:40` 运行；可用
-`launchctl print "gui/$(id -u)/com.tmt.daily-worklog"` 查看状态。Windows Task
-Scheduler 或 Linux cron/systemd 可按同样的入口命令配置。日报覆盖写入：
-
-```text
-worklogs/YYYY-MM-DD.md
-worklogs/latest.md
-```
-
-程序运行日志写入 `logs/worklog.log`。多仓库通过逗号、分号或换行分隔：
-
-```bash
-WORKLOG_WORKSPACE_ROOTS=/Users/me/code/project-a,/Users/me/code/project-b
-WORKLOG_TIMEZONE=Asia/Shanghai
-WORKLOG_SCHEDULE_HOUR=17
-WORKLOG_SCHEDULE_MINUTE=40
-WORKLOG_OUTPUT_DIR=./worklogs
-```
-
-常见问题：目录不是 Git 仓库会记录 warning 并跳过；模型格式校验失败会使用证据摘要；
-旧脏文件按文件修改时间过滤，删除类变更以 Git 工作区状态作为证据；重复执行只覆盖当天
-文件，不会生成副本。
-
 ## 测试
 
 首次准备或 CI 环境安装：
