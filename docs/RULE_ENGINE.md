@@ -1,24 +1,42 @@
 # Rule Engine / Customer Service Rules v1
 
-## 1. Why rules run before Intent
+## 1. Runtime position
 
-The rule layer is a deterministic safety and context gate placed before FAQ, Intent Classifier, and RAG. It handles messages whose meaning can be decided reliably from normalized text alone, such as an explicit human request, an active complaint, a high-risk after-sale action, a pure greeting, or a pure courtesy close.
+The rule layer is a deterministic safety and context gate in the current unified chat path:
+
+```text
+POST /api/v1/chat
+        ↓
+ChatService
+        ↓
+RuleRegistry
+        ↓
+Rule evaluation
+        ↓
+Terminal?
+```
+
+The same deterministic layer is also exposed for diagnostics and compatibility as
+`POST /api/v1/rules/evaluate`. That endpoint evaluates rules only; it does not perform product lookup,
+QA/RAG retrieval, message sending, or state checkpointing.
+
+It handles messages whose meaning can be decided reliably from normalized text alone, such as an explicit human request, an active complaint, a high-risk after-sale action, a pure greeting, a pure courtesy close, or a message that requires the current product context.
 
 It is not a replacement for Intent or RAG:
 
 - It does not call an LLM, database, Tool, PDD connector, or FastAPI request object.
 - It does not send a customer message or perform a transfer.
-- It only returns a serializable decision. The future caller decides which side effect, if any, to execute.
+- It only returns a serializable decision. `ChatService` consumes that decision and decides whether to return a fixed reply, route to human, continue to Product Resolution, or fall through to QA.
 - The same message and `RuleContext` always produce the same result.
 
-This keeps low-latency, high-certainty behavior separate from probabilistic classification and retrieval.
+This keeps low-latency, high-certainty behavior ahead of PostgreSQL product lookup and QA/RAG retrieval.
 
 ## 2. Terminal versus Enrichment
 
 | Kind | Behavior | v1 rules |
 | --- | --- | --- |
-| Terminal | A match resolves this turn's rule phase. The caller can use `fixed_reply` and/or route to human without invoking FAQ, Intent, or RAG. | `HumanHandoffRule`, `ComplaintRule`, `AfterSaleRiskRule`, `GreetingRule`, `CourtesyRule` |
-| Enrichment | A match adds context but does not resolve the turn. Later FAQ, Intent, or RAG still runs. | `ProductContextRule` |
+| Terminal | A match resolves this turn before Product Resolution and QA/RAG. `ChatService` returns the fixed reply / route and does not call product answer or QA. | `HumanHandoffRule`, `ComplaintRule`, `AfterSaleRiskRule`, `GreetingRule`, `CourtesyRule` |
+| Enrichment | A match adds context but does not resolve the turn. Product Resolution or QA can still run. | `ProductContextRule` |
 
 `RuleRegistry.evaluate()` collects all matched enrichment decisions first, then runs terminal rules by descending priority and stops at the first match. This ordering preserves product context even when a higher-priority risk rule eventually terminates the turn.
 
@@ -100,10 +118,12 @@ Normalization performs Unicode NFKC normalization, case folding, whitespace coll
 
 Use `default_rule_registry()` to build a fresh registry containing all v1 rules. `RuleRegistry` can also register custom `BaseRule` implementations; it never specializes behavior by concrete rule class.
 
-## 7. Multi-rule resolution
+## 7. Multi-rule resolution in unified chat
 
 ```text
-Customer Message
+POST /api/v1/chat
+      ↓
+ChatService
       ↓
 Normalize
       ↓
@@ -121,11 +141,13 @@ Terminal?
  ┌────┴────┐
 YES        NO
 ↓           ↓
-Fixed       Future FAQ
+Fixed       Product Resolution
 Reply /       ↓
-Human      Intent Classifier
+Human      Product Answer?
              ↓
-         RAG / Tool / General
+          QAService
+             ↓
+        FAQ / RAG / fallback
 ```
 
 Examples:
@@ -133,11 +155,33 @@ Examples:
 - `你好，我要投诉` — complaint wins over greeting; terminal route is `human`.
 - `您好，我要人工` — human handoff wins over greeting; terminal route is `human`.
 - `这个不合适，我要退款` — product enrichment remains available while `AfterSaleRiskRule` terminates with `human`.
-- `这个怎么戴` — only product enrichment matches; no terminal decision, so a future router may continue.
+- `这个怎么戴` — only product enrichment matches; no terminal decision, so `ChatService` can continue to product answer when a bound product exists.
 - `谢谢，这个一天戴多久？` — neither courtesy nor greeting matches; the product question remains available.
 
-## 8. Current scope
+### Refund action versus refund policy
 
-This version intentionally does **not** implement FAQ matching, FAQ aliases, Intent Classification, RAG changes, Tool Calling, direct Console integration, PDD auto-reply integration, database persistence, or state-contract changes.
+`AfterSaleRiskRule` intentionally distinguishes execution requests from policy questions:
 
-The next integration point is `CustomerMessageRouter`. It should execute the deterministic rule layer first and continue with FAQ, Intent Classifier, and then RAG / Tool / General only when no terminal rule has resolved the turn.
+- `我要退款` means the customer is asking the system to perform or start an after-sale action. It is terminal and routes to human.
+- `支持退款吗？` asks for policy information. It is not terminal by this rule and may continue to Product Resolution or QA.
+- `怎么申请退款？` is also a policy/process question unless phrased as a direct action request such as `请帮我申请退款`.
+
+Do not replace these patterns with a broad substring match on `退款`; that would incorrectly short-circuit safe policy questions.
+
+## 8. ProductContextRule boundary
+
+`ProductContextRule` is not a product database reader and not a product answer generator. It only marks that the message needs product context when the user asks a product-shaped question and either refers to the current product (`这个`, `这款`, `它`) or `RuleContext.current_product_id` already exists.
+
+Examples:
+
+- `一天戴多久？` with `current_product_id` set requires product context.
+- `这个怎么清洗？` requires product context because it contains an implicit product reference.
+- A message without a product question or bound product does not match.
+
+The rule does not persist product facts. In unified chat, `ChatService` uses the result to decide whether it should resolve a product ID and then ask PostgreSQL-backed product services for facts.
+
+## 9. Current scope and non-responsibilities
+
+This version intentionally does **not** implement database product detail queries, PostgreSQL repository access, Milvus retrieval, LLM generation, Tool execution, side effects, full Agent State, Checkpoint persistence, or Agent Graph orchestration.
+
+Rule Engine is the deterministic decision layer. Product facts belong to PostgreSQL-backed services, QA/RAG evidence belongs to `QAService` and Milvus/BM25 retrieval, and runtime workflow state belongs to the State Contract / Checkpoint infrastructure.

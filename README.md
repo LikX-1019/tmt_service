@@ -11,6 +11,33 @@ QA 模块由 `QAService` 统一编排，不依赖 FastAPI 或 LangGraph。它优
 精确匹配，未命中时并行执行 Milvus Dense Search 与内存 BM25，使用 RRF 融合、
 BGE Reranker 和证据阈值后生成答案；证据不足时直接返回固定 fallback。
 
+当前 Customer Demo 和新聊天集成的主入口是 `POST /api/v1/chat`。后端统一执行：
+
+```text
+Customer Demo / Client
+        ↓
+POST /api/v1/chat
+        ↓
+ChatService
+        ↓
+Rule Engine
+        ↓
+Terminal Rule?
+  ├── Yes → fixed reply / human route
+  └── No
+        ↓
+Product Resolution
+  ├── Product Answer
+  └── No Product
+        ↓
+QAService
+        ↓
+FAQ / RAG / fallback
+```
+
+`POST /api/v1/qa` 仍是独立知识问答接口，供 QA/RAG 调试和兼容调用使用；它不是
+Customer Demo 的默认主链路。
+
 ## 环境要求
 
 - Python 3.11+
@@ -94,9 +121,12 @@ uv run python scripts/upgrade_product_postgres.py
 uv run python scripts/upgrade_product_postgres.py --check
 ```
 
-Alembic 只管理 MySQL，包括 `chat_conversation_products`、`cs_qa`、会话、消息、发送任务
-和审计事件。商品主数据及 `product_api_profiles` 位于独立 PostgreSQL；全新数据库使用
-init SQL，已有数据库必须执行 `upgrade_product_postgres.py`。Milvus 只保存 QA vectors。
+Alembic 只管理 MySQL 客服业务持久化，包括 `shops`、`customers`、`conversations`、
+`messages`、`outbound_jobs`、`reply_decisions`、`connector_events`、`cs_qa` 和
+`chat_conversation_products`。商品事实位于独立 PostgreSQL，包含 `products`、
+`product_variants` 和面向已发布商品客服资料的 `product_api_profiles` 视图；
+全新数据库使用 init SQL，已有数据库必须执行 `upgrade_product_postgres.py`。Milvus
+只保存 QA/RAG vector index，不保存商品主数据或长期业务状态。
 完整部署顺序及多 worktree 隔离方式见
 [`docs/数据库升级与多Worktree开发.md`](docs/数据库升级与多Worktree开发.md)。
 
@@ -130,11 +160,12 @@ uv run uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 此时不会实例化 `ShopRuntimeManager`、`ConsoleRuntime`、PDD Connector 或 Chrome；
-`/health`、`/api/v1/qa` 与 `/qa-demo` 继续可用，Console 相关 API 返回
+`/health`、`/api/v1/chat`、`/api/v1/qa`、`/customer-demo` 与 `/qa-demo` 继续可用，Console 相关 API 返回
 `503 CONSOLE_UNAVAILABLE`。控制台页面保留，重新设置 `CONSOLE_ENABLED=true` 并重启即可。
 
 客服控制台：启动服务后访问 `http://127.0.0.1:8000/`。页面无需安装 Node.js 或
-执行前端构建。原聊天测试页移动到 `http://127.0.0.1:8000/chat-demo`。
+执行前端构建。Unified Chat 测试页是 `http://127.0.0.1:8000/customer-demo`；原聊天测试页
+保留在 `http://127.0.0.1:8000/chat-demo`。
 
 ### 添加和管理拼多多店铺
 
@@ -189,13 +220,41 @@ Wilson 95% 置信区间下界达到 `AUTO_REPLY_MIN_PRECISION`（默认 0.98）�
 聚合质检指标、没有逐条查询标注，因此在补齐标注并运行校准前，RAG 会安全降级为
 人工建议。
 
+### Unified Chat 与 Customer Demo
+
 聊天接口：`POST /api/v1/chat`：
 
 ```json
 {
-  "message": "你好"
+  "conversation_id": "sess_123",
+  "customer_id": "demo_customer",
+  "message": "这个一天戴多久？",
+  "product_id": "972793561880",
+  "service_stage": "pre_sale"
 }
 ```
+
+响应会返回 `source`、`route`、`product_resolution`、`rule_name`、`confidence`、`qa_hit`
+和 `sources` 等调试字段。`source` 可能为 `rule`、`product`、`product_selection` 或
+`qa`；`product_resolution` 表示商品 ID 来自本次 request、商品 URL、消息文本、
+商品名称精确匹配/候选、已有 conversation binding，或没有商品上下文。
+
+`chat_conversation_products` 是 MySQL 中的 conversation-product binding：
+
+```text
+conversation_id ↔ product_id
+```
+
+表内 `product_name` 只是有限展示标签。完整商品事实不会长期保存在 binding 中；后续追问会
+通过 conversation binding 取得 `product_id`，再重新查询 PostgreSQL 商品资料。
+
+`/customer-demo` 默认使用 unified chat transport，即 `POST /api/v1/chat`。页面支持多
+Session、每个 Session 的商品上下文隔离、显式 Product ID、消息中的 Product ID、商品 URL
+解析、商品名称候选选择、Conversation Product Binding 和 Debug Panel。Debug Panel 展示
+`route`、`source`、`rule`、`confidence`、`qa_hit`、`sources`、`product_resolution`、
+`current_product_id`、`request_id` 和 latency 等字段。页面仍保留
+`QA compatibility + rule preflight` 和 `future rag-chat` 选项用于开发对照，但默认路径不是
+`/api/v1/qa`。
 
 知识问答接口：`POST /api/v1/qa`：
 
@@ -329,6 +388,12 @@ rg -n -F '"request_id": "req-123"' logs
 
 ## 测试
 
+首次准备或 CI 环境安装：
+
+```powershell
+uv sync --frozen
+```
+
 ```powershell
 uv run pytest -q
 ```
@@ -356,6 +421,18 @@ docker compose config --quiet
 uv run python scripts/dev_compose.py info
 ```
 
+GitHub Actions 已建立在 `.github/workflows/ci.yml` 中，会在 pull request 和 `master`
+push 时执行 `lint` 与 `test` 两个 job：
+
+```powershell
+uv sync --frozen
+uv run ruff check .
+uv run pytest -q
+```
+
+是否将这些 job 配置为 required status checks 由 GitHub repository settings 决定，仓库内
+CI 文件本身不代表分支保护已经启用。
+
 ### 常见问题
 
 - `cs_qa` 为空：这是清理后的安全状态；新增 QA 时执行 migration 并用新的已审核工作簿运行导入脚本。
@@ -368,8 +445,8 @@ uv run python scripts/dev_compose.py info
 
 ## 当前边界
 
-首版只支持一个店铺、一台 Windows 电脑和一个本地客服用户。暂不读取订单详情、物流
-轨迹或退款进度，不处理图片理解、语音转写、多店铺、多客服分配和公网部署。页面自动化
+当前仍面向本地客服中台部署，暂不读取订单详情、物流轨迹或退款进度，不处理图片理解、
+语音转写、多客服分配和公网部署。页面自动化
 可能随拼多多页面升级而需要更新 `app/integrations/pdd/selectors.py`；业务层通过
 `CustomerServiceConnector` 接口隔离，后续可替换为官方连接器。
 

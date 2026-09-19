@@ -1,11 +1,14 @@
 # State Contract v2
 
-本文定义客服 Agent 的可序列化状态契约。它面向 Customer Demo、PDD、淘宝、抖音等未来渠道，但只定义 State 与边界，不实现商品查询、Query Rewrite、Memory Store、Tool Calling、RAGChatService 或 LangGraph。
+本文定义客服 Agent 的可序列化状态契约。当前仓库已经实现 State Contract v2 的模型、
+序列化、文件检查点、恢复协调和 PendingAction 安全语义；但它尚未正式接入
+`POST /api/v1/chat` 的 runtime lifecycle。当前 unified chat 多轮商品上下文主要仍依赖
+`conversation_id` 和 MySQL `chat_conversation_products`。
 
 ## 1. 核心原则
 
 1. State 保存“引用和运行状态”，不是所有业务事实。
-2. 商品数据库是商品事实唯一 Source of Truth。
+2. PostgreSQL 商品数据库是商品事实唯一 Source of Truth。
 3. Session State 只保存 `current_product.product_id` / `sku_id` 等稳定引用。
 4. 每次真正回答商品问题时，根据 `product_id` 读取最新资料。
 5. 查询到的商品资料只作为当前 Turn 的 `ResolvedProductContext`。
@@ -32,7 +35,34 @@ AgentState
 
 新代码应优先创建和读取 `AgentState.session` 与 `AgentState.turn`；旧字段仅作为兼容信封和 Coordinator 工作区。
 
-## 3. State Contract
+## 3. 当前实现状态
+
+### Implemented
+
+- `ChatSessionState`、`ChatTurnState`、`AgentState`、`StatePatch` 和强类型子状态模型。
+- `ProductReference`、`ProductResolutionState`、`ResolvedProductContext`、`RetrievalState`、`ToolState`、`HumanState`、`WorkflowState` 和 `PendingAction`。
+- JSON serialization / deserialization，包含既有 v1 checkpoint shape 读取时升级为 schema v2。
+- `FileCheckpointStore` 原子 JSON 检查点、revision 冲突检测和可恢复状态枚举。
+- `StateCoordinator` 节点前后检查点、retryable failure resume、running node resume 和 pending action safety。
+- `PendingAction` 在 `EXECUTING` 或 `UNCERTAIN` 恢复时转人工，避免重复发送、重复退款或重复取消订单。
+
+### Not Integrated Yet
+
+- `POST /api/v1/chat` 还不是由 `Load ChatSessionState → Create ChatTurnState → Rule → Product → QA → Persist State` 驱动。
+- `ChatService` 当前直接执行 `RuleRegistry → ProductResolver/ProductRepository → QAService`，没有加载或保存 `ChatSessionState` / `ChatTurnState`。
+- 当前多轮商品上下文由 `conversation_id` + MySQL `chat_conversation_products` 持久化绑定提供，不是由 Session State 的 `current_product` 提供。
+- `app/agent/graph.py` 仍是 TODO，Agent Graph / LangGraph 尚未接管 ChatService。
+
+### Planned
+
+- Chat Runtime Integration。
+- Memory Store。
+- Context Builder / `LLMContextBuilder`。
+- Query Rewrite。
+- Tool Runtime。
+- Full Agent Graph。
+
+## 4. State Contract
 
 ### ChatSessionState
 
@@ -187,7 +217,34 @@ AgentState
 
 `WorkflowState` 保存 run、节点、resume、retry、revision、checkpoint reason、错误和 pending action。`PendingAction` 保留 `prepared -> executing -> succeeded/failed/uncertain`，`executing` 崩溃后恢复时必须转为 `uncertain` 并人工核对，不能自动重试。
 
-## 4. 商品上下文流
+## 5. 商品上下文流
+
+本节描述 State Runtime 接入后的目标流，不是当前 `/api/v1/chat` 的实际执行路径。
+当前实际路径是：
+
+```text
+POST /api/v1/chat
+        ↓
+ChatService
+        ↓
+RuleRegistry
+        ↓
+ProductResolver
+        ↓
+conversation_id + chat_conversation_products
+        ↓
+product_id
+        ↓
+PostgreSQL product_api_profiles
+        ↓
+ProductAnswer
+```
+
+`chat_conversation_products` 是持久化 conversation-product binding；`ChatSessionState.current_product`
+是 State Contract 中的运行时 `ProductReference`。两者都只应保存商品引用，不是商品事实的
+Source of Truth。
+
+目标 State Runtime 流程：
 
 ```text
 User: “这个怎么使用？”
@@ -229,25 +286,28 @@ Final Answer
 
 禁止让 LLM 根据 `product_id` 猜测商品资料；禁止把完整商品资料长期复制进 Session State。
 
-## 5. State 与 Prompt 的边界
+## 6. State 与 Prompt 的边界
 
 State 不是 Prompt。未来 `LLMContextBuilder` 输入 `ChatSessionState`、`ChatTurnState`、短期记忆、长期记忆和 RAG 证据，输出受控 `LLMContext`。哪些商品字段、多少历史消息、多少记忆和哪些证据进入 Prompt，由 Context Builder 决定，而不是把 State 原样发给模型。
 
-## 6. Persistence Boundary
+## 7. Persistence Boundary
 
 | 数据 | Source of Truth |
 |---|---|
-| 完整聊天历史 | MySQL messages |
-| session_id | Session State / DB |
-| turn_id | Turn State / DB |
-| message_id | messages |
-| 当前 product_id / sku_id | Session State |
-| 商品完整资料 | Product DB |
+| 完整聊天历史 | MySQL `messages` |
+| 客服会话和顾客关系 | MySQL `conversations` / `customers` |
+| 当前统一 Chat 商品绑定 | MySQL `chat_conversation_products` |
+| session_id | Session State / DB；当前 `/api/v1/chat` 使用 `conversation_id` |
+| turn_id | Turn State / DB；当前 `/api/v1/chat` 未创建 `ChatTurnState` |
+| message_id | MySQL `messages` |
+| 当前 product_id / sku_id | Session State `ProductReference`；当前 unified chat 使用 conversation binding |
+| 商品完整资料 | PostgreSQL `products` / `product_variants` / `product_api_profiles` |
 | 当前商品快照 | Turn State |
 | 最近消息 ID | ShortTermMemoryState |
 | 会话摘要 | Session / Memory Store |
 | 长期记忆 | Memory Store |
-| RAG Knowledge | QA DB / Milvus |
+| QA 知识库 | MySQL `cs_qa` |
+| QA vectors | Milvus |
 | RAG candidates | TurnState / trace |
 | Tool 实例 | ToolRegistry |
 | Tool result 大对象 | Tool Result Store，State 只存 ref |
@@ -255,7 +315,14 @@ State 不是 Prompt。未来 `LLMContextBuilder` 输入 `ChatSessionState`、`Ch
 | Checkpoint | Checkpoint Store |
 | Workflow execution | TurnState / Checkpoint |
 
-## 7. StatePatch 兼容策略
+MySQL、PostgreSQL、Milvus 和 Checkpoint / State 的边界如下：
+
+- MySQL 保存客服业务持久化：`conversations`、`messages`、`outbound_jobs`、`reply_decisions`、`connector_events`、`cs_qa` 和 `chat_conversation_products` 等。
+- PostgreSQL 保存商品事实，`product_api_profiles` 是商品客服 API 读取的已发布商品资料视图。
+- Milvus 保存 QA/RAG vectors，不保存商品主数据或长期业务状态。
+- Checkpoint / State 保存 runtime、recovery 和 workflow state，不替代 MySQL/PostgreSQL 的 Source of Truth。
+
+## 8. StatePatch 兼容策略
 
 `StatePatch` 保留 v1 的：
 
