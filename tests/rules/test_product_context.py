@@ -22,6 +22,22 @@ def test_does_not_mark_without_reference_and_product_question(message: str) -> N
     assert decision.requires_product is False
 
 
+def test_bound_product_duration_question_uses_conversation_context() -> None:
+    decision = ProductContextRule().evaluate("一天戴多久", RuleContext(current_product_id="p1"))
+
+    assert decision.matched is True
+    assert decision.requires_product is True
+    assert decision.reason_code == "implicit_product_reference"
+    assert decision.metadata == {"current_product_available": True}
+
+
+def test_duration_question_without_bound_product_does_not_require_product() -> None:
+    decision = ProductContextRule().evaluate("一天戴多久", RuleContext())
+
+    assert decision.matched is False
+    assert decision.requires_product is False
+
+
 def test_metadata_reports_missing_current_product() -> None:
     decision = ProductContextRule().evaluate("这个怎么戴", RuleContext())
 

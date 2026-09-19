@@ -54,10 +54,11 @@ class ProductContextRule(BaseRule):
         has_product_question = any(
             hint in message for hint in _PRODUCT_QUESTION_HINTS
         )
-        if not (has_reference and has_product_question):
+        has_bound_product = context.current_product_id is not None
+        if not has_product_question or not (has_reference or has_bound_product):
             return self.no_match()
 
-        available = context.current_product_id is not None
+        available = has_bound_product
         return RuleDecision(
             matched=True,
             rule_name=self.name,

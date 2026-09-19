@@ -226,6 +226,22 @@ async def test_follow_up_uses_bound_product_without_new_id() -> None:
     assert answers.calls == ["1001", "1001"]
 
 
+async def test_duration_followup_reloads_bound_product_context() -> None:
+    conversations = FakeConversations()
+    conversations.values["c1"] = ("1001", "护腕")
+    service, products, answers, qa, _ = make_service(conversations=conversations)
+
+    result = await service.chat(ChatRequest(conversation_id="c1", message="一天戴多久？"))
+
+    assert result.source == "product"
+    assert result.product is not None
+    assert result.product.id == "1001"
+    assert result.product_resolution == "conversation"
+    assert products.calls == ["1001"]
+    assert answers.calls == ["1001"]
+    assert qa.calls == 0
+
+
 async def test_conversation_can_switch_explicit_product() -> None:
     service, _, _, _, conversations = make_service()
     await service.chat(ChatRequest(conversation_id="c1", message="这个怎么样", product_id="1001"))

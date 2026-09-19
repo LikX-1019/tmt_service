@@ -69,6 +69,12 @@ _QUESTION_MARKERS = (
 )
 _BARE_ID_CONTEXT_MARKERS = (*_QUESTION_MARKERS, "商品", "产品", "介绍", "详情", "价格", "多少钱")
 _GENERIC_WORDS = ("这个", "那个", "这款", "那款", "这种", "这样一种", "它", "该", "商品", "产品")
+# Duration follow-ups such as “一天戴多久” contain a time expression, not a product name.
+_GENERIC_DURATION_QUERY = re.compile(
+    r"(?:每天|每次|平时|平常|通常|一般|长期|连续)?"
+    r"(?:[0-9一二两三四五六七八九十]+(?:天|日|小时|分钟|次))?"
+    r"(?:戴|用|使用|佩戴|穿|清洗|保养)?"
+)
 _PRONOUN_PRODUCT_PREFIXES = (
     "那这个商品",
     "这个商品",
@@ -187,6 +193,8 @@ class ProductResolver:
             return None
         if cut_positions:
             normalized = normalized[: min(cut_positions)].strip()
+        if normalized and _GENERIC_DURATION_QUERY.fullmatch(normalized):
+            return None
         for word in _GENERIC_WORDS:
             if normalized.startswith(word):
                 normalized = normalized[len(word) :].strip()

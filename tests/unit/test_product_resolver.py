@@ -70,6 +70,8 @@ def test_resolve_known_product_url_before_message_and_conversation() -> None:
     [
         ("JAFFICK运动护膝适合跑步吗？", "jaffick运动护膝"),
         ("我想问一下 XX护膝", "xx护膝"),
+        ("一天戴多久？", None),
+        ("一天用多久？", None),
         ("它适合什么场景？", None),
         ("你们什么时候发货？", None),
     ],
