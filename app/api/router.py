@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from app.api.v1.chat import router as chat_router
 from app.api.v1.console import router as console_router
+from app.api.v1.ops import router as ops_router
 from app.api.v1.qa import router as qa_router
 from app.api.v1.rules import router as rules_router
 
@@ -13,4 +14,5 @@ api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(chat_router)
 api_router.include_router(qa_router)
 api_router.include_router(rules_router)
+api_router.include_router(ops_router)
 api_router.include_router(console_router)

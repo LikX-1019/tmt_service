@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>TMT 服务导航台</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/assets/service-hub/app.css?v=1">
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">T</span>
+        <div>
+          <strong>TMT 服务导航台</strong>
+          <small>本地入口、依赖进程与健康管理</small>
+        </div>
+      </div>
+      <div class="top-status">
+        <span id="connectionDot" class="status-dot offline"></span>
+        <span id="connectionText">连接中…</span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel links-panel">
+        <div class="panel-head">
+          <div>
+            <h1>页面入口</h1>
+            <p>点击卡片会在新标签页打开，避免丢失当前监控状态。</p>
+          </div>
+          <button type="button" id="refreshButton" class="secondary-button">立即刷新</button>
+        </div>
+        <div id="linkGrid" class="link-grid"></div>
+      </section>
+
+      <section class="panel process-panel">
+        <div class="panel-head">
+          <div>
+            <h1>主服务进程</h1>
+            <p>当前 FastAPI / Uvicorn 进程健康与 PID。</p>
+          </div>
+          <span id="appHealth" class="pill pending">检测中</span>
+        </div>
+        <dl class="metric-grid">
+          <div><dt>PID</dt><dd id="appPid">-</dd></div>
+          <div><dt>监听地址</dt><dd id="appAddress">-</dd></div>
+          <div><dt>健康耗时</dt><dd id="appLatency">-</dd></div>
+          <div><dt>最后刷新</dt><dd id="lastRefresh">-</dd></div>
+        </dl>
+        <div class="action-row">
+          <button type="button" id="startAppButton" class="primary-button">启动主服务</button>
+          <button type="button" id="restartAppButton" class="secondary-button">重启主服务</button>
+          <button type="button" id="stopAppButton" class="danger-button">停止主服务</button>
+        </div>
+        <p class="note">停止后该页面会随主服务一起下线；再次启动请使用终端中的项目启动命令，或提前使用“重启主服务”完成自动拉起。</p>
+      </section>
+
+      <section class="panel endpoints-panel">
+        <div class="panel-head">
+          <div>
+            <h1>HTTP 健康</h1>
+            <p>主服务与商品资料服务的真实 HTTP 探测。</p>
+          </div>
+          <span id="commodityHealth" class="pill pending">检测中</span>
+        </div>
+        <div id="endpointList" class="endpoint-list"></div>
+      </section>
+
+      <section class="panel docker-panel">
+        <div class="panel-head">
+          <div>
+            <h1>Docker 依赖服务</h1>
+            <p>仅允许白名单服务；停止使用 stop，不会删除数据卷。</p>
+          </div>
+          <span id="composeStatus" class="pill pending">检测中</span>
+        </div>
+        <div class="action-row">
+          <button type="button" data-target="core" data-action="start" class="primary-button service-action">启动核心依赖</button>
+          <button type="button" data-target="core" data-action="restart" class="secondary-button service-action">重启核心依赖</button>
+          <button type="button" data-target="core" data-action="stop" class="danger-button service-action">停止核心依赖</button>
+          <button type="button" data-target="all" data-action="start" class="ghost-button service-action">启动全部</button>
+          <button type="button" data-target="all" data-action="stop" class="ghost-button service-action">停止全部</button>
+        </div>
+        <div id="serviceGrid" class="service-grid"></div>
+      </section>
+
+      <section class="panel log-panel">
+        <div class="panel-head">
+          <div>
+            <h1>操作记录</h1>
+            <p>显示本次浏览器会话内的操作结果。</p>
+          </div>
+          <button type="button" id="clearLogButton" class="ghost-button">清空</button>
+        </div>
+        <ol id="operationLog" class="operation-log"></ol>
+      </section>
+    </main>
+  </div>
+  <script src="/assets/service-hub/app.js?v=1"></script>
+</body>
+</html>

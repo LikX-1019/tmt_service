@@ -30,6 +30,12 @@ async def customer_demo_page() -> FileResponse:
     )
 
 
+@router.get("/service-hub", response_class=FileResponse)
+async def service_hub_page() -> FileResponse:
+    """返回本地服务导航与进程监控页面。"""
+    return FileResponse(WEB_ROOT / "service-hub" / "index.html", media_type="text/html")
+
+
 @router.get("/assets/console/{asset_name}", response_class=FileResponse)
 async def console_asset(asset_name: str) -> FileResponse:
     """仅公开控制台固定静态资源，避免任意路径读取。"""
@@ -39,6 +45,20 @@ async def console_asset(asset_name: str) -> FileResponse:
         raise HTTPException(status_code=404)
     media_type = "text/css" if asset_name.endswith(".css") else "text/javascript"
     return FileResponse(WEB_ROOT / "console" / asset_name, media_type=media_type)
+
+
+@router.get("/assets/service-hub/{asset_name}", response_class=FileResponse)
+async def service_hub_asset(asset_name: str) -> FileResponse:
+    """仅公开服务导航页固定静态资源，避免任意路径读取。"""
+    if asset_name not in {"app.css", "app.js"}:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404)
+    media_type = "text/css" if asset_name.endswith(".css") else "text/javascript"
+    return FileResponse(
+        WEB_ROOT / "service-hub" / asset_name,
+        media_type=media_type,
+    )
 
 
 @router.get("/assets/customer-demo/{asset_name}", response_class=FileResponse)
