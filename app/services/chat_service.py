@@ -25,7 +25,12 @@ from app.schemas.chat import (
     ChatResponse,
     ChatSourceView,
 )
-from app.services.product_resolver import ConversationProductReference, ProductResolver
+from app.services.product_resolver import (
+    ConversationProductReference,
+    ProductResolution,
+    ProductResolver,
+)
+from app.services.semantic_product_resolver import SemanticProductResolver
 from app.services.social_router import SocialDecision, SocialRouter
 from app.services.contextual_fallback_service import ContextualFallbackService
 from app.services.product_service import (
@@ -169,6 +174,7 @@ class ChatService:
         social_router: SocialRouter | None = None,
         message_repository: ChatConversationMessageRepository | None = None,
         fallback_service: ContextualFallbackService | None = None,
+        semantic_product_resolver: SemanticProductResolver | None = None,
     ) -> None:
         self._rules = rule_registry or default_rule_registry()
         self._conversations = conversation_repository
@@ -180,6 +186,7 @@ class ChatService:
         self._social_router = social_router or SocialRouter()
         self._messages = message_repository
         self._fallbacks = fallback_service or ContextualFallbackService()
+        self._semantic_products = semantic_product_resolver or SemanticProductResolver()
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         if request.conversation_id is None:
@@ -303,7 +310,51 @@ class ChatService:
             conversation_product_id=binding.product_id if binding else None,
             recent_products=recent_products,
         )
-        explicit_product = resolution.source in {"request", "url", "message_id", "history"}
+        if (
+            resolution.source == "conversation"
+            and ProductResolver.has_historical_reference(request.message)
+            and recent_products
+        ):
+            semantic_resolution = await self._semantic_products.resolve(
+                request.message,
+                candidates=recent_products,
+                current_product_id=binding.product_id if binding else None,
+            )
+            logger.info(
+                "semantic_product_resolution_completed",
+                extra={
+                    "event": "semantic_product_resolution_completed",
+                    "product_entity_resolver_used": True,
+                    "semantic_product_resolved": semantic_resolution.matched,
+                    "semantic_product_confidence": semantic_resolution.confidence,
+                    "semantic_product_candidates": len(recent_products),
+                    "semantic_product_ambiguous": semantic_resolution.ambiguous,
+                    "semantic_product_reason": semantic_resolution.reason_code,
+                },
+            )
+            if semantic_resolution.ambiguous:
+                return ChatResponse(
+                    conversation_id=request.conversation_id,
+                    answer="您提到了多个商品，请告诉我具体想咨询哪一个。",
+                    source="product",
+                    route="product_selection",
+                    product_resolution="history_semantic",
+                    reason_code=semantic_resolution.reason_code,
+                    confidence=semantic_resolution.confidence,
+                )
+            if semantic_resolution.matched and semantic_resolution.product_id:
+                resolution = ProductResolution(
+                    semantic_resolution.product_id,
+                    "history_semantic",
+                )
+
+        explicit_product = resolution.source in {
+            "request",
+            "url",
+            "message_id",
+            "history",
+            "history_semantic",
+        }
         name_query = None
         keep_bound_product = (
             resolution.source == "conversation"
@@ -388,11 +439,12 @@ class ChatService:
             except ProductLookupError as exc:
                 raise ProductServiceUnavailableError() from exc
 
-        await self._bind_product(
-            request.conversation_id,
-            product,
-            recent_products=recent_products,
-        )
+        if product is not None:
+            await self._bind_product(
+                request.conversation_id,
+                product,
+                recent_products=recent_products,
+            )
         if product_question:
             self._state_runtime.record_product_resolved(
                 state,

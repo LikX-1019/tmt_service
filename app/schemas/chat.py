@@ -15,6 +15,7 @@ ProductResolutionSource = Literal[
     "name_exact",
     "name_unique_contains",
     "history",
+    "history_semantic",
     "name_candidates",
     "conversation",
     "none",

@@ -4,6 +4,7 @@ import pytest
 
 from app.agent.chat_runtime import ChatStateRuntime
 from app.repositories.chat_message_repository import ChatConversationMessageRepository
+from app.services.semantic_product_resolver import SemanticProductResolution
 from app.core.config import Settings
 from app.core.exceptions import ProductServiceUnavailableError
 from app.qa.models import QAResult, QASource
@@ -130,6 +131,31 @@ class FakeQA:
         )
 
 
+class FakeSemanticProducts:
+    def __init__(self, responses: dict[str, str] | None = None) -> None:
+        self.calls: list[str] = []
+        self.responses = responses or {}
+
+    async def resolve(self, message: str, **_: Any) -> SemanticProductResolution:
+        self.calls.append(message)
+        product_id = self.responses.get(message)
+        if product_id:
+            return SemanticProductResolution(
+                matched=True,
+                product_id=product_id,
+                confidence=0.95,
+                reason_code="semantic_match",
+            )
+        return SemanticProductResolution(reason_code="no_match")
+
+
+class OtherSocialRouter:
+    async def classify(self, *_args: Any, **_kwargs: Any):
+        from app.services.social_router import SocialDecision
+
+        return SocialDecision(intent="other")
+
+
 class FakeFallback:
     def __init__(self, answer: str = "QA 回答") -> None:
         self.calls: list[str] = []
@@ -154,6 +180,8 @@ def make_service(
     state_runtime: ChatStateRuntime | None = None,
     messages: ChatConversationMessageRepository | None = None,
     fallback: FakeFallback | None = None,
+    semantic_products: FakeSemanticProducts | None = None,
+    social_router: Any | None = None,
 ) -> tuple[ChatService, FakeProducts, FakeProductAnswers, FakeQA, FakeConversations]:
     products = products or FakeProducts(
         {
@@ -185,6 +213,8 @@ def make_service(
         state_runtime=state_runtime,
         message_repository=messages,
         fallback_service=fallback or FakeFallback(),
+        semantic_product_resolver=semantic_products,
+        social_router=social_router,
     )
     return service, products, answers, qa, conversations
 
@@ -482,6 +512,25 @@ async def test_product_provider_failure_is_explicitly_unavailable() -> None:
     assert qa.calls == 0
 
 
+def _mat_and_bottle_products() -> FakeProducts:
+    return FakeProducts(
+        {
+            "TEST-MAT-003": ProductProfile(
+                id="TEST-MAT-003",
+                name="测试商品-瑜伽垫",
+                summary="瑜伽支撑。",
+                specifications={"厚度": "8mm", "尺寸": "183cm × 61cm"},
+            ),
+            "TEST-BOTTLE-002": ProductProfile(
+                id="TEST-BOTTLE-002",
+                name="测试商品-运动水壶",
+                summary="运动补水。",
+                specifications={"容量": "500ml"},
+            ),
+        }
+    )
+
+
 def _wrist_and_bottle_products() -> FakeProducts:
     return FakeProducts(
         {
@@ -715,3 +764,65 @@ async def test_multiple_name_contains_matches_require_selection() -> None:
     assert response.product_resolution == "name_candidates"
     assert len(response.products) == 2
     assert answers.calls == []
+
+
+
+async def test_no_product_fallback_does_not_bind_none() -> None:
+    conversations = FakeConversations()
+    fallback = FakeFallback("无法获取当前日期。")
+    service, products, answers, qa, conversations = make_service(
+        conversations=conversations,
+        fallback=fallback,
+        social_router=OtherSocialRouter(),
+    )
+
+    response = await service.chat(
+        ChatRequest(conversation_id="c1", message="今天星期几")
+    )
+
+    assert response.source == "llm_fallback"
+    assert response.route == "llm_fallback"
+    assert response.product is None
+    assert products.calls == []
+    assert answers.calls == []
+    assert qa.calls == 1
+    assert "c1" not in conversations.values
+
+
+async def test_semantic_history_resolver_maps_water_cup_to_bottle() -> None:
+    products = _mat_and_bottle_products()
+    conversations = FakeConversations()
+    semantic = FakeSemanticProducts(
+        {"那这个水杯的容量呢": "TEST-BOTTLE-002"}
+    )
+    service, products, answers, qa, conversations = make_service(
+        products=products,
+        conversations=conversations,
+        semantic_products=semantic,
+    )
+
+    await service.chat(
+        ChatRequest(conversation_id="c1", message="TEST-MAT-003 介绍一下")
+    )
+    await service.chat(
+        ChatRequest(conversation_id="c1", message="TEST-BOTTLE-002 介绍一下")
+    )
+    await service.chat(
+        ChatRequest(conversation_id="c1", message="刚刚那个瑜伽垫的厚度是多少啊")
+    )
+    response = await service.chat(
+        ChatRequest(conversation_id="c1", message="那这个水杯的容量呢")
+    )
+
+    assert response.source == "product"
+    assert response.route == "product"
+    assert response.product is not None
+    assert response.product.id == "TEST-BOTTLE-002"
+    assert response.product_resolution == "history_semantic"
+    assert semantic.calls == ["那这个水杯的容量呢"]
+    assert answers.calls[-1] == "TEST-BOTTLE-002"
+    assert conversations.values["c1"] == (
+        "TEST-BOTTLE-002",
+        "测试商品-运动水壶",
+    )
+    assert qa.calls == 0

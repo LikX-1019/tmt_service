@@ -222,6 +222,11 @@ class ProductResolver:
         return None
 
     @staticmethod
+    def has_historical_reference(message: str) -> bool:
+        """是否包含“刚刚那个 / 那这个…呢”等历史回指线索。"""
+        return bool(_HISTORICAL_REFERENCE_PATTERN.search(message))
+
+    @staticmethod
     def _historical_product_id(
         message: str,
         recent_products: Sequence[ConversationProductReference],

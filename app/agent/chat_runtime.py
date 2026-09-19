@@ -42,6 +42,7 @@ _PRODUCT_SOURCE_MAP = {
     "url": "message_extraction",
     "message_id": "message_extraction",
     "name_exact": "message_extraction",
+    "history_semantic": "message_extraction",
     # MySQL 绑定没有保存最初识别来源，恢复时使用中性的手工引用语义。
     "conversation": "manual",
 }
