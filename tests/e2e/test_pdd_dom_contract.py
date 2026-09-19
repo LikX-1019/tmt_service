@@ -24,7 +24,8 @@ async def test_dom_contract_discovers_messages_and_confirms_send() -> None:
         except Exception as exc:
             pytest.skip(f"系统 Chrome 不可用：{exc}")
         page = await browser.new_page()
-        await page.set_content("""
+        await page.set_content(
+            """
           <div class="chat-item active" data-random="buyer-1-reply">
             <div class="chat-portrait"><img src="https://img.example/avatar-a.jpg?token=secret"></div>
             <span class="name">顾客甲</span><span class="unread">2</span>
@@ -34,7 +35,9 @@ async def test_dom_contract_discovers_messages_and_confirms_send() -> None:
             <div class="message-item right" data-message-id="m2"><span currentuid="buyer-1" class="message-text">在边缘区域</span></div>
           </div>
           <textarea id="replyTextarea"></textarea><button class="send-btn">发送</button>
-        """)
+        """,
+            wait_until="domcontentloaded",
+        )
         conversations = await page.evaluate(SCAN_CONVERSATIONS_SCRIPT)
         messages = await page.evaluate(SCAN_CURRENT_MESSAGES_SCRIPT, "buyer-1")
         assert conversations[0].pop("identity_material") == "顾客甲|https://img.example/avatar-a.jpg"
@@ -154,7 +157,8 @@ async def test_current_pdd_dom_shape_is_supported() -> None:
         except Exception as exc:
             pytest.skip(f"系统 Chrome 不可用：{exc}")
         page = await browser.new_page()
-        await page.set_content("""
+        await page.set_content(
+            """
           <div class="chat-list-box"><div class="chat-list"><ul>
             <li class="chat-item"><div class="chat-item-box active" data-random="buyer-2-reply">
               <div class="chat-portrait"><img src="https://img.example/avatar-b.jpg"></div>
@@ -174,7 +178,9 @@ async def test_current_pdd_dom_shape_is_supported() -> None:
             </div></li>
           </ul></div><div class="reply-box"><div class="reply-input"><textarea id="replyTextarea"></textarea></div>
             <button class="send-btn">发送</button></div></div>
-        """)
+        """,
+            wait_until="domcontentloaded",
+        )
         conversations = await page.evaluate(SCAN_CONVERSATIONS_SCRIPT)
         messages = await page.evaluate(SCAN_CURRENT_MESSAGES_SCRIPT, "buyer-2")
         history = await page.evaluate(MESSAGE_HISTORY_STATE_SCRIPT)
