@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -122,15 +123,35 @@ def test_logging_rolls_all_files_at_midnight_without_restart(
     )
     logging.getLogger("app.test").info("before_midnight")
 
+    coordinator = logging_module._coordinator
+    assert coordinator is not None
+    old_streams = {
+        name: handler.stream
+        for name, handler in coordinator.handlers.items()
+    }
+    old_contents = {
+        path: path.read_text(encoding="utf-8")
+        for path in (isolated_logging / "2026-09-19").glob("*.log")
+    }
+
     state["now"] = now + timedelta(seconds=1)
     logging.getLogger("app.qa.service").info("after_midnight")
 
-    assert (isolated_logging / "2026-09-19" / "app.log").is_file()
     new_dir = isolated_logging / "2026-09-20"
     assert {path.name for path in new_dir.iterdir()} == EXPECTED_FILES
     assert get_log_file_paths() is not None
     assert set(get_log_file_paths()) == EXPECTED_FILES
     assert all(path.parent == new_dir for path in get_log_file_paths().values())
+    assert all(stream.closed for stream in old_streams.values())
+    assert all(
+        handler.stream is not None and handler.path is not None
+        for handler in coordinator.handlers.values()
+    )
+    assert all(
+        handler.path.parent == new_dir for handler in coordinator.handlers.values()
+    )
+    for old_path, old_content in old_contents.items():
+        assert old_path.read_text(encoding="utf-8") == old_content
     before = read_json_lines(isolated_logging / "2026-09-19" / "app.log")
     after = read_json_lines(new_dir / "app.log")
     assert any(item["message"] == "before_midnight" for item in before)
@@ -178,6 +199,7 @@ def test_error_routing_traceback_and_sensitive_values(
     error_errors = records_with_event(date_dir / "error.log", "qa_failed")
     assert app_errors and error_errors
     for record in (*app_errors, *error_errors):
+        assert "event" not in record["fields"]
         assert "Traceback (most recent call last):" in record["traceback"]
         assert "ValueError" in record["traceback"]
         assert "test_error_routing_traceback_and_sensitive_values" in record["traceback"]
@@ -189,6 +211,37 @@ def test_error_routing_traceback_and_sensitive_values(
         assert raw_cookie not in content
     for name in ("app.log", "error.log", "qa.log"):
         assert "[REDACTED]" in (date_dir / name).read_text(encoding="utf-8")
+
+
+def test_logger_routes_without_duplicate_records_in_one_file(
+    isolated_logging: Path,
+) -> None:
+    now = datetime(2026, 9, 19, 11, 15, tzinfo=timezone.utc)
+    configure_logging(
+        Settings(_env_file=None, log_dir=isolated_logging),
+        force=True,
+        clock=lambda: now,
+    )
+    cases = (
+        ("app.general", "general_event", "app.log"),
+        ("app.middleware.logging", "access_event", "access.log"),
+        ("app.qa.service", "qa_event", "qa.log"),
+        ("app.integrations.pdd.playwright_connector", "connector_event", "connector.log"),
+        ("app.services.console_runtime", "console_connector_event", "connector.log"),
+        ("app.services.shop_runtime_manager", "manager_connector_event", "connector.log"),
+        ("app.audit.business", "audit_event", "audit.log"),
+    )
+    for logger_name, event, _ in cases:
+        assert logging.getLogger(logger_name).propagate is True
+        logging.getLogger(logger_name).info(event, extra={"event": event})
+
+    date_dir = isolated_logging / "2026-09-19"
+    for logger_name, event, dedicated_file in cases:
+        # 分类文件写入一次；传播到 root 后 app.log 也写入一次，这是预期分流，
+        # 不是同一文件重复写入。
+        assert len(records_with_event(date_dir / dedicated_file, event)) == 1
+        assert len(records_with_event(date_dir / "app.log", event)) == 1
+        assert len(records_with_event(date_dir / "error.log", event)) == 0
 
 
 def test_sensitive_values_are_redacted(isolated_logging: Path) -> None:
@@ -271,24 +324,27 @@ async def test_background_task_gets_fresh_trace_context(
         clock=lambda: now,
     )
 
-    async def job() -> None:
-        logging.getLogger("app.background.test").info(
-            "background_job",
-            extra={"event": "background_job"},
-        )
+    async def log_job(event: str) -> None:
+        logging.getLogger("app.background.test").info(event, extra={"event": event})
 
     with log_context(request_id="http-request"):
-        task = create_log_task(job(), shop_id="shop-bg")
-        await task
+        inherited_task = asyncio.create_task(log_job("inherited_background_job"))
+        await inherited_task
+        background_task = create_log_task(log_job("isolated_background_job"), shop_id="shop-bg")
+        await background_task
         assert get_request_id() == "http-request"
 
-    records = records_with_event(
-        isolated_logging / "2026-09-19" / "app.log", "background_job"
+    inherited = records_with_event(
+        isolated_logging / "2026-09-19" / "app.log", "inherited_background_job"
     )
-    assert records
-    assert records[-1]["request_id"].startswith("bg-")
-    assert records[-1]["trace_id"] == records[-1]["request_id"]
-    assert records[-1]["shop_id"] == "shop-bg"
+    isolated = records_with_event(
+        isolated_logging / "2026-09-19" / "app.log", "isolated_background_job"
+    )
+    assert inherited and isolated
+    assert inherited[-1]["request_id"] == "http-request"
+    assert isolated[-1]["request_id"].startswith("bg-")
+    assert isolated[-1]["trace_id"] == isolated[-1]["request_id"]
+    assert isolated[-1]["shop_id"] == "shop-bg"
 
 
 @pytest.mark.asyncio

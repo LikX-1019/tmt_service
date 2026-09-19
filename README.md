@@ -273,11 +273,55 @@ trace 时二者相同。错误记录包含完整 `traceback`，但客户端只�
 不会看到 Python 堆栈。密码、Token、Authorization、Cookie 等敏感字段会在日志层
 统一脱敏，访问日志也不记录请求体或查询参数。
 
+
+### Logger 路由规则
+
+| Logger 前缀 / 名称 | 专项目志 | 同时写入 `app.log` | 说明 |
+| --- | --- | --- | --- |
+| root 及其他未命中规则 logger | - | 是 | 全量应用与框架日志 |
+| `app.middleware.logging` | `access.log` | 是 | HTTP 访问日志 |
+| `app.qa` | `qa.log` | 是 | QA/RAG 及其子模块 |
+| `app.integrations.pdd` | `connector.log` | 是 | PDD 连接器 |
+| `app.services.console_runtime` | `connector.log` | 是 | Console 连接运行时 |
+| `app.services.shop_runtime_manager` | `connector.log` | 是 | 多店铺连接器管理 |
+| `app.audit` | `audit.log` | 是 | 预留审计 logger |
+| 任意 logger 的 `ERROR/CRITICAL` | `error.log` | 是 | 双写错误分流 |
+
+专项目志 handler 依赖 logger 默认 `propagate=True` 传播到 root；同一条日志会在专项目志
+和 `app.log` 各出现一次，但不会在同一个文件内重复出现。`event`、`method`、`path`、
+`status_code`、`duration_ms`、`model` 等高频字段只保留在 JSON 顶层，其余 extra 字段
+放在 `fields`。
+
+### 标准排障 SOP
+
+1. 先确定日志日期。服务使用本地日期目录；跨天请求分别查看前后两个日期目录。
+2. 优先从 `error.log` 找错误原因和 traceback。
+3. 用 `conversation_id` 汇总会话内所有请求，再取其中异常请求的 `request_id`。
+4. 用 `request_id` 精确还原单次 HTTP / service / QA / connector 链路。
+5. 如调用方或下游服务单独传入 trace，用 `trace_id` 做跨服务关联；未显式传入时它与
+   `request_id` 相同。
+
 ```bash
-# 先按会话定位，再按单次请求缩小范围
-rg -F '"conversation_id":"conv-123"' logs/YYYY-MM-DD
-rg -F '"request_id":"req-123"' logs/YYYY-MM-DD
+LOG_DATE=$(date +%F)
+
+# 1. 先看当日 ERROR / CRITICAL 和完整 traceback
+rg -n '"level": "(ERROR|CRITICAL)"' "logs/${LOG_DATE}/error.log"
+
+# 2. 按会话定位完整链路，并从结果中提取异常 request_id
+rg -n -F '"conversation_id": "conv-123"' "logs/${LOG_DATE}"
+
+# 3. 按单次请求精确排查 HTTP、service、QA、connector 与异常日志
+rg -n -F '"request_id": "req-123"' "logs/${LOG_DATE}"
+
+# 4. 需要跨服务/跨进程关联时按 trace 查询；默认等于 request_id
+rg -n -F '"trace_id": "trace-123"' "logs/${LOG_DATE}"
+
+# 不确定具体日期时全量检索
+rg -n -F '"request_id": "req-123"' logs
 ```
+
+`rg` 默认输出文件名和行号。若需要上下文，可追加 `-C 3`；若只查错误文件，可将目标限定为
+`logs/${LOG_DATE}/error.log`。
 
 ## 测试
 

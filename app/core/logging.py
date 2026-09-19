@@ -239,8 +239,12 @@ class JsonFormatter(logging.Formatter):
                 else _sanitize_value(value)
             )
             for key, value in record.__dict__.items()
-            if key not in _RESERVED_RECORD_KEYS and not key.startswith("_")
+            if key not in _RESERVED_RECORD_KEYS
+            and key not in _TOP_LEVEL_FIELDS
+            and not key.startswith("_")
         }
+        # event/method/path 等高频检索字段保留在顶层；避免同时写入 fields
+        # 造成同一 JSON 行内重复。
         for key in _TOP_LEVEL_FIELDS:
             if hasattr(record, key):
                 value = getattr(record, key)
