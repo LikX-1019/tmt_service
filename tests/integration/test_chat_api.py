@@ -105,6 +105,9 @@ async def test_chat_api_hides_llm_traceback() -> None:
 @pytest.mark.asyncio
 async def test_chat_api_sanitizes_qa_provider_errors() -> None:
     class BrokenQAService:
+        def match_exact(self, *_args: object, **_kwargs: object):
+            raise LLMInvocationError("DeepSeek private API key rejected")
+
         async def answer(self, *_args: object, **_kwargs: object) -> None:
             raise LLMInvocationError("DeepSeek private API key rejected")
 

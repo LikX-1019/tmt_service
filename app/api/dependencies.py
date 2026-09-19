@@ -21,9 +21,11 @@ from app.rag.retrieval.bm25_retriever import BM25Retriever
 from app.rag.retrieval.dense_retriever import DenseRetriever
 from app.rag.retrieval.hybrid_retriever import HybridRetriever
 from app.rag.retrieval.reranker import BGEReranker
+from app.repositories.chat_message_repository import ChatConversationMessageRepository
 from app.repositories.conversation_repository import ConversationProductRepository
 from app.repositories.product_repository import ProductRepository
 from app.services.chat_service import ChatService
+from app.services.contextual_fallback_service import ContextualFallbackService
 from app.services.console_runtime import ConsoleRuntime
 from app.services.shop_runtime_manager import ShopRuntimeManager
 
@@ -36,7 +38,9 @@ def get_chat_service() -> ChatService:
     """返回统一后端聊天路由；懒加载商品、会话和 QA 依赖。"""
     return ChatService(
         conversation_repository=ConversationProductRepository(get_session_factory()),
+        message_repository=ChatConversationMessageRepository(get_session_factory()),
         product_repository=ProductRepository(),
+        fallback_service=ContextualFallbackService(),
         qa_provider=get_qa_service,
         state_runtime=ChatStateRuntime(FileCheckpointStore()),
     )

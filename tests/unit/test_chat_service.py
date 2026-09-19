@@ -3,6 +3,7 @@ from typing import Any
 import pytest
 
 from app.agent.chat_runtime import ChatStateRuntime
+from app.repositories.chat_message_repository import ChatConversationMessageRepository
 from app.core.config import Settings
 from app.core.exceptions import ProductServiceUnavailableError
 from app.qa.models import QAResult, QASource
@@ -112,6 +113,13 @@ class FakeQA:
         self.calls = 0
         self.result = result
 
+    def match_exact(self, *_args: Any, **_kwargs: Any):
+        return self.result
+
+    async def retrieve_context_candidates(self, *_args: Any, **_kwargs: Any) -> list:
+        self.calls += 1
+        return []
+
     async def answer(self, *_args: Any, **_kwargs: Any) -> QAResult:
         self.calls += 1
         return self.result or QAResult(
@@ -122,12 +130,30 @@ class FakeQA:
         )
 
 
+class FakeFallback:
+    def __init__(self, answer: str = "QA 回答") -> None:
+        self.calls: list[str] = []
+        self.answer = answer
+
+    async def generate(self, query: str, **_: Any):
+        from app.services.contextual_fallback_service import ContextualFallbackAnswer
+
+        self.calls.append(query)
+        return ContextualFallbackAnswer(
+            answer=self.answer,
+            confidence=0.98,
+            needs_human=False,
+        )
+
+
 def make_service(
     *,
     products: FakeProducts | None = None,
     conversations: FakeConversations | None = None,
     qa: FakeQA | None = None,
     state_runtime: ChatStateRuntime | None = None,
+    messages: ChatConversationMessageRepository | None = None,
+    fallback: FakeFallback | None = None,
 ) -> tuple[ChatService, FakeProducts, FakeProductAnswers, FakeQA, FakeConversations]:
     products = products or FakeProducts(
         {
@@ -157,6 +183,8 @@ def make_service(
             Settings(_env_file=None, product_api_base_url="http://127.0.0.1:8088")
         ),
         state_runtime=state_runtime,
+        message_repository=messages,
+        fallback_service=fallback or FakeFallback(),
     )
     return service, products, answers, qa, conversations
 
@@ -285,9 +313,9 @@ async def test_bound_conversation_does_not_force_general_shipping_question_to_pr
 
     result = await service.chat(ChatRequest(conversation_id="c1", message="你们什么时候发货"))
 
-    assert result.source == "qa"
-    assert result.product_resolution == "none"
-    assert products.calls == []
+    assert result.source == "llm_fallback"
+    assert result.product_resolution == "conversation"
+    assert products.calls == ["1001"]
     assert answers.calls == []
     assert qa.calls == 1
 
@@ -418,11 +446,11 @@ async def test_qa_detour_preserves_product_for_later_follow_up() -> None:
         ChatRequest(conversation_id="c1", message="那这个商品还有什么注意事项？")
     )
 
-    assert qa_result.source == "qa"
+    assert qa_result.source == "llm_fallback"
     assert product_result.source == "product"
     assert product_result.product_resolution == "conversation"
     assert conversations.values["c1"] == ("2002", "护膝")
-    assert products.calls == ["2002", "2002"]
+    assert products.calls == ["2002", "2002", "2002"]
     assert answers.calls == ["2002", "2002"]
     assert qa.calls == 1
 
@@ -470,6 +498,56 @@ def _wrist_and_bottle_products() -> FakeProducts:
             ),
         }
     )
+
+
+async def test_bound_product_fallback_uses_context_without_keyword_route() -> None:
+    conversations = FakeConversations()
+    conversations.values["c1"] = ("TEST-BOTTLE-002", "测试商品-运动水壶")
+    fallback = FakeFallback("可以装，耐温范围覆盖 80 度。")
+    service, products, answers, qa, _ = make_service(
+        products=_wrist_and_bottle_products(),
+        conversations=conversations,
+        fallback=fallback,
+    )
+
+    response = await service.chat(
+        ChatRequest(conversation_id="c1", message="80度的水可以装吗")
+    )
+
+    assert response.source == "llm_fallback"
+    assert response.route == "llm_fallback"
+    assert response.product is not None
+    assert response.product.id == "TEST-BOTTLE-002"
+    assert fallback.calls == ["80度的水可以装吗"]
+    assert products.calls == ["TEST-BOTTLE-002"]
+    assert answers.calls == []
+    assert qa.calls == 1
+
+
+async def test_qa_exact_match_precedes_rules_and_fallback() -> None:
+    qa = FakeQA(
+        QAResult(
+            answer="标准 QA 答案",
+            route="faq",
+            confidence=1.0,
+            sources=[QASource(chunk_id="QA-1", title="发货", source="cs_qa")],
+        )
+    )
+    fallback = FakeFallback("不应使用")
+    service, _, answers, _, _ = make_service(
+        qa=qa,
+        fallback=fallback,
+    )
+
+    response = await service.chat(
+        ChatRequest(conversation_id="c1", message="你们什么时候发货")
+    )
+
+    assert response.source == "qa"
+    assert response.route == "faq"
+    assert response.answer == "标准 QA 答案"
+    assert fallback.calls == []
+    assert answers.calls == []
 
 
 async def test_product_attribute_followups_keep_bound_product() -> None:

@@ -56,7 +56,9 @@ class ChatResponse(BaseModel):
 
     conversation_id: str | None = None
     answer: str
-    source: Literal["rule", "product", "product_selection", "qa"]
+    source: Literal[
+        "rule", "product", "product_selection", "qa", "llm_fallback"
+    ]
     route: str | None = None
     product: ChatProductView | None = None
     products: list[ChatProductCandidateView] = Field(default_factory=list)

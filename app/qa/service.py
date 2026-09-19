@@ -251,6 +251,12 @@ class QAService:
         documents = await self._retriever.retrieve(query.strip())
         return await self._reranker.rerank(query.strip(), documents)
 
+    async def retrieve_context_candidates(self, query: str) -> list[RetrievalDocument]:
+        """为 LLM 兜底提供参考资料；知识库为空时不阻断兜底链路。"""
+        if not self._has_knowledge:
+            return []
+        return await self.retrieve_rag_candidates(query)
+
     def _log_result(
         self,
         started_at: float,

@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable, Sequence
+from uuid import uuid4
 from typing import Any
 
 from app.agent.chat_runtime import ChatStateRuntime
 from app.agent.state import AgentState
 from app.core.exceptions import AppException, LLMInvocationError, ProductServiceUnavailableError
 from app.models.chat import ChatConversationProduct
-from app.qa.models import QAResult
+from app.qa.models import QAResult, RetrievalDocument
 from app.qa.service import QAService
+from app.repositories.chat_message_repository import ChatConversationMessageRepository
 from app.repositories.conversation_repository import ConversationProductRepository
 from app.repositories.product_repository import ProductRepository
 from app.rules.base import RuleContext
@@ -25,6 +27,7 @@ from app.schemas.chat import (
 )
 from app.services.product_resolver import ConversationProductReference, ProductResolver
 from app.services.social_router import SocialDecision, SocialRouter
+from app.services.contextual_fallback_service import ContextualFallbackService
 from app.services.product_service import (
     ProductAnswer,
     ProductAnswerService,
@@ -72,14 +75,24 @@ def _social_response(
     )
 
 
-def _log_chat_response(message: str, response: ChatResponse) -> None:
+def _log_chat_response(
+    message: str,
+    response: ChatResponse,
+    *,
+    history_turn_count: int = 0,
+    history_loaded: bool = False,
+) -> None:
     logger.info(
         "chat_response_completed",
         extra={
             "event": "chat_response_completed",
             "message_length": len(message),
+            "history_turn_count": history_turn_count,
+            "history_loaded": history_loaded,
             "route": response.route,
             "intent": response.route,
+            "qa_exact_hit": response.route == "faq",
+            "product_context_used": response.product is not None,
             "social_intent": (
                 response.route
                 if response.route in {"small_talk", "empathy"}
@@ -89,14 +102,59 @@ def _log_chat_response(message: str, response: ChatResponse) -> None:
             "resolved_product": response.product.id if response.product else None,
             "answer_source": response.source,
             "fallback_reason": (
-                response.route if response.route == "fallback" else None
+                response.reason_code
+                if response.route in {"fallback", "llm_fallback"}
+                else None
             ),
         },
     )
 
 
+def _qa_response(
+    request: ChatRequest,
+    result: QAResult,
+    binding: ChatConversationProduct | None,
+) -> ChatResponse:
+    return ChatResponse(
+        conversation_id=request.conversation_id,
+        answer=result.answer,
+        source="qa",
+        route=result.route,
+        product_resolution=(
+            "conversation" if binding is not None and binding.product_id else "none"
+        ),
+        confidence=result.confidence,
+        qa_hit=result.route != "fallback",
+        sources=[
+            ChatSourceView(
+                chunk_id=source.chunk_id,
+                title=source.title,
+                source=source.source,
+                score=source.score,
+            )
+            for source in result.sources
+        ],
+    )
+
+
+def _human_from_fallback(
+    request: ChatRequest,
+    answer: str,
+    reason_code: str | None,
+    confidence: float | None,
+) -> ChatResponse:
+    return ChatResponse(
+        conversation_id=request.conversation_id,
+        answer=answer,
+        source="llm_fallback",
+        route="human",
+        reason_code=reason_code or "fallback_needs_human",
+        confidence=confidence,
+    )
+
+
 class ChatService:
-    """封装 Terminal Rule → Product → QA 的后端主路由。"""
+    """封装 QA 精确命中、受控规则、商品事实和多轮 LLM 兜底。"""
 
     def __init__(
         self,
@@ -109,6 +167,8 @@ class ChatService:
         product_resolver: ProductResolver | None = None,
         state_runtime: ChatStateRuntime | None = None,
         social_router: SocialRouter | None = None,
+        message_repository: ChatConversationMessageRepository | None = None,
+        fallback_service: ContextualFallbackService | None = None,
     ) -> None:
         self._rules = rule_registry or default_rule_registry()
         self._conversations = conversation_repository
@@ -118,19 +178,44 @@ class ChatService:
         self._product_resolver = product_resolver or ProductResolver()
         self._state_runtime = state_runtime or ChatStateRuntime()
         self._social_router = social_router or SocialRouter()
+        self._messages = message_repository
+        self._fallbacks = fallback_service or ContextualFallbackService()
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
+        if request.conversation_id is None:
+            request = request.model_copy(
+                update={"conversation_id": f"chat-{uuid4()}"}
+            )
+        conversation_id = request.conversation_id
+        assert conversation_id is not None
         state = self._state_runtime.create_state(
             message=request.message,
-            conversation_id=request.conversation_id,
+            conversation_id=conversation_id,
             customer_id=request.customer_id,
             service_stage=request.service_stage,
         )
+        history: list[dict[str, str | None]] = []
         try:
             await self._state_runtime.start(state)
-            response = await self._route_chat(request, state)
+            if self._messages is not None:
+                history = await self._messages.list_recent_turns(
+                    conversation_id, limit=10
+                )
+                await self._messages.append_customer_message(
+                    conversation_id, request.message
+                )
+            response = await self._route_chat(request, state, history=history)
             await self._state_runtime.complete(state, response)
-            _log_chat_response(request.message, response)
+            if self._messages is not None:
+                await self._messages.append_assistant_message(
+                    conversation_id, response.answer
+                )
+            _log_chat_response(
+                request.message,
+                response,
+                history_turn_count=len(history),
+                history_loaded=self._messages is not None,
+            )
             return response
         except Exception as exc:
             try:
@@ -149,10 +234,25 @@ class ChatService:
         self,
         request: ChatRequest,
         state: AgentState,
+        *,
+        history: list[dict[str, str | None]] | None = None,
     ) -> ChatResponse:
+        history = history or []
         binding = await self._load_binding(request.conversation_id)
         if binding is not None and binding.product_id:
             self._state_runtime.hydrate_product_binding(state, binding.product_id)
+        if self._qa_provider is not None:
+            qa_service = await self._qa_provider()
+            qa_exact = qa_service.match_exact(
+                request.message,
+                product_code=binding.product_id if binding else None,
+                product_name=binding.product_name if binding else None,
+                service_stage=request.service_stage,
+            )
+            if qa_exact is not None:
+                self._state_runtime.record_qa(state, qa_exact)
+                return _qa_response(request, qa_exact, binding)
+
         rule_result = self._rules.evaluate(
             request.message,
             RuleContext(
@@ -186,7 +286,11 @@ class ChatService:
 
         social_decision = (
             await self._social_router.classify(request.message)
-            if not rule_result.requires_product and not request.product_id
+            if (
+                binding is None
+                and not rule_result.requires_product
+                and not request.product_id
+            )
             else SocialDecision()
         )
         if social_decision.intent != "other" and social_decision.response:
@@ -257,53 +361,69 @@ class ChatService:
                 rule_name=self._matched_product_rule(rule_result),
             )
 
-        if not product_question:
-            return await self._answer_with_qa(request, state)
-
-        assert self._products is not None
-        assert resolution.product_id is not None
-        try:
-            product = await self._products.get_product_by_id(resolution.product_id)
-        except ProductNotFoundError:
-            if resolution.source == "conversation":
-                await self._clear_binding_if_present(request.conversation_id)
-                self._state_runtime.clear_product_binding(state)
-            return ChatResponse(
-                conversation_id=request.conversation_id,
-                answer=(
-                    "未找到对应商品，请确认商品链接。"
-                    if resolution.source == "url"
-                    else "未找到对应商品，请确认商品信息后重试。"
-                ),
-                source="product",
-                route="product_not_found",
-                product_resolution=resolution.source,
-                rule_name=self._matched_product_rule(rule_result),
-            )
-        except ProductLookupError as exc:
-            raise ProductServiceUnavailableError() from exc
+        product: ProductProfile | None = None
+        if resolution.product_id is not None:
+            assert self._products is not None
+            assert resolution.product_id is not None
+            try:
+                product = await self._products.get_product_by_id(
+                    resolution.product_id
+                )
+            except ProductNotFoundError:
+                if resolution.source == "conversation":
+                    await self._clear_binding_if_present(request.conversation_id)
+                    self._state_runtime.clear_product_binding(state)
+                return ChatResponse(
+                    conversation_id=request.conversation_id,
+                    answer=(
+                        "未找到对应商品，请确认商品链接。"
+                        if resolution.source == "url"
+                        else "未找到对应商品，请确认商品信息后重试。"
+                    ),
+                    source="product",
+                    route="product_not_found",
+                    product_resolution=resolution.source,
+                    rule_name=self._matched_product_rule(rule_result),
+                )
+            except ProductLookupError as exc:
+                raise ProductServiceUnavailableError() from exc
 
         await self._bind_product(
             request.conversation_id,
             product,
             recent_products=recent_products,
         )
-        self._state_runtime.record_product_resolved(
-            state,
-            product,
-            source=resolution.source,
-        )
-        try:
-            answer = await self._product_answers.answer(
-                request.message,
+        if product_question:
+            self._state_runtime.record_product_resolved(
+                state,
                 product,
-                conversation_id=request.conversation_id,
+                source=resolution.source,
             )
-        except AppException:
-            raise
-        except Exception as exc:
-            raise LLMInvocationError() from exc
-        return self._product_response(request, product, answer, resolution.source, rule_result)
+
+            try:
+                answer = await self._product_answers.answer(
+                    request.message,
+                    product,
+                    conversation_id=request.conversation_id,
+                )
+            except AppException:
+                raise
+            except Exception as exc:
+                raise LLMInvocationError() from exc
+            return self._product_response(
+                request,
+                product,
+                answer,
+                resolution.source,
+                rule_result,
+            )
+
+        return await self._generate_fallback(
+            request,
+            state,
+            history=history,
+            product=product,
+        )
 
     async def _load_binding(self, conversation_id: str | None) -> ChatConversationProduct | None:
         if not conversation_id or self._conversations is None:
@@ -361,36 +481,87 @@ class ChatService:
             return
         await self._conversations.clear_binding(conversation_id)
 
-    async def _answer_with_qa(
+    async def _generate_fallback(
         self,
         request: ChatRequest,
         state: AgentState,
+        *,
+        history: list[dict[str, str | None]],
+        product: ProductProfile | None,
     ) -> ChatResponse:
-        if self._qa_provider is None:
-            raise RuntimeError("QA provider is not configured")
-        qa_service = await self._qa_provider()
-        result: QAResult = await qa_service.answer(
-            request.message,
-            service_stage=request.service_stage,
+        """QA 未命中后的多轮自然语言兜底；知识库为空不阻断。"""
+        references: list[RetrievalDocument] = []
+        if self._qa_provider is not None:
+            try:
+                qa_service = await self._qa_provider()
+                references = await qa_service.retrieve_context_candidates(
+                    request.message
+                )
+            except Exception:
+                logger.warning(
+                    "qa_fallback_context_retrieval_failed",
+                    exc_info=True,
+                    extra={
+                        "event": "qa_fallback_context_retrieval_failed",
+                        "fallback_reason": "rag_context_unavailable",
+                    },
+                )
+        try:
+            result = await self._fallbacks.generate(
+                request.message,
+                history=history,
+                product=product,
+                references=references,
+            )
+        except Exception as exc:
+            logger.exception(
+                "contextual_fallback_failed",
+                extra={
+                    "event": "contextual_fallback_failed",
+                    "fallback_reason": "llm_unavailable",
+                },
+            )
+            if isinstance(exc, AppException):
+                raise
+            raise LLMInvocationError() from exc
+
+        state.route = "llm_fallback"
+        logger.info(
+            "contextual_fallback_completed",
+            extra={
+                "event": "contextual_fallback_completed",
+                "history_turn_count": len(history),
+                "product_context_used": product is not None,
+                "answer_source": "llm_fallback",
+                "llm_confidence": result.confidence,
+                "needs_human": result.needs_human,
+                "fallback_reason": result.reason_code,
+            },
         )
-        self._state_runtime.record_qa(state, result)
+        if result.needs_human:
+            return _human_from_fallback(
+                request,
+                result.answer,
+                result.reason_code,
+                result.confidence,
+            )
         return ChatResponse(
             conversation_id=request.conversation_id,
             answer=result.answer,
-            source="qa",
-            route=result.route,
-            product_resolution="none",
+            source="llm_fallback",
+            route="llm_fallback",
+            product=(
+                ChatProductView(id=product.id, name=product.name)
+                if product is not None
+                else None
+            ),
+            product_resolution=(
+                "conversation"
+                if product is not None
+                else "none"
+            ),
             confidence=result.confidence,
-            qa_hit=result.route != "fallback",
-            sources=[
-                ChatSourceView(
-                    chunk_id=source.chunk_id,
-                    title=source.title,
-                    source=source.source,
-                    score=source.score,
-                )
-                for source in result.sources
-            ],
+            reason_code=result.reason_code,
         )
 
     async def _resolve_product_name(

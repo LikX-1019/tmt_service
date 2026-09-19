@@ -209,7 +209,7 @@ async def test_general_qa_hydrates_session_without_starting_product_turn(
     assert state.session.current_product is not None
     assert state.session.current_product.product_id == "1001"
     assert state.turn.product.status == "not_required"
-    assert products.calls == []
+    assert products.calls == ["1001"]
     assert qa.calls == 1
 
 

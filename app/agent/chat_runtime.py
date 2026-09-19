@@ -366,6 +366,7 @@ def _response_state_route(response: ChatResponse) -> ChatRoute:
         "greeting",
         "small_talk",
         "empathy",
+        "llm_fallback",
         "fallback",
         "tool",
     }:
