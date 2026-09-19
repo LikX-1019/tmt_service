@@ -21,6 +21,7 @@ dependencies = [
     "sentence-transformers>=3,<6",
     "sqlalchemy[asyncio]>=2,<3",
     "uvicorn[standard]>=0.34,<1",
+    "langgraph>=1.2,<2",
 ]
 
 [dependency-groups]

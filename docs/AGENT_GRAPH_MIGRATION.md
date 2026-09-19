@@ -5,6 +5,9 @@
 ```text
 PHASE = Phase 2 — Unified Agent Graph Migration
 GRAPH_MIGRATION_FREEZE = active
+G0 = COMPLETED
+G1 = COMPLETED
+G2 = NOT_STARTED
 PLAN_VERSION = 1
 BASELINE_DATE = 2026-09-20
 ```
@@ -46,8 +49,9 @@ GitNexus 当前调用关系确认：
 
 已有迁移基础包括 `AgentState`、`ChatSessionState`、`ChatTurnState`、`StatePatch`、
 `StateCoordinator`、`FileCheckpointStore`、`ChatStateRuntime` 和 PendingAction
-安全语义。`app/agent/nodes/*`、`app/agent/edges/*` 与 `app/agent/graph.py` 目前
-都是 TODO 占位；Agent Graph 没有可执行主图，也没有接管 Unified Chat 或 PDD。
+安全语义。G1 已引入 LangGraph，`AgentRuntime` 和最小可执行 StateGraph 骨架，
+拓扑为 START → session_hydrate → guard → response → END。生产 Unified Chat 与
+PDD 仍分别走 ChatService / ConsoleRuntime，Agent Graph 尚未接管任何生产流量。
 
 ## Target Architecture
 
@@ -129,6 +133,20 @@ G0 基线结果见 `docs/AGENT_GRAPH_G0_BASELINE.md`。要点：
 | Tests | Graph 编译测试、Node 输入输出测试、Guard 前置顺序测试、StatePatch 契约测试、失败注入测试。 |
 | Acceptance | 相同 `AgentState` 输入可执行主图；Node 返回 StatePatch；Guard 可终止或继续；异常可进入失败/恢复路径。 |
 | Rollback | 移除 Runtime wiring/flag 后旧路径不受影响。 |
+
+G1 已完成，运行契约和验收证据见 `docs/AGENT_GRAPH_G1_RUNTIME.md`。要点：
+
+* 引入 `langgraph>=1.2,<2`，当前锁定 `1.2.11`；`uv sync --frozen` 通过。
+* `StateGraph(AgentState)` 真实编译，`AgentRuntime.invoke()` 使用异步 `ainvoke`。
+* Node contract 固定为 `AgentState → StatePatch`；`GraphNodeAdapter` 负责 deepcopy、
+  lifecycle、`AgentState.apply_patch` 和 LangGraph transport snapshot。
+* `START → session_hydrate → guard → response → END` 可执行；guard terminal 与
+  continue 均覆盖。
+* 节点失败产生内存中的 `FAILED` / `error.node` / `resume_from` / failed trace，
+  且不污染输入 State。
+* 未接入生产 DI，未配置 LangGraph checkpointer，未修改 ChatService / ConsoleRuntime。
+* Agent tests：84 passed；full regression：453 passed；ruff、diff-check、
+  `uv sync --frozen` 通过。
 
 ### Phase G2 — Unified Chat Migration
 

@@ -78,6 +78,7 @@ Unified Chat 与 PDD 最终共享同一个 AgentRuntime 和 AgentGraph。Node �
 项目处于 **Phase 2 — Unified Agent Graph Migration**，
 `GRAPH_MIGRATION_FREEZE = active`。Agent Graph 尚未完全接管；阶段计划、验收条件
 和回滚边界以 `docs/AGENT_GRAPH_MIGRATION.md` 为准。
+G1 的可执行 LangGraph Skeleton 已存在，但只在显式构造 Runtime 和测试中执行。
 
 ### Implemented
 
@@ -91,6 +92,8 @@ Unified Chat 与 PDD 最终共享同一个 AgentRuntime 和 AgentGraph。Node �
 - `ChatStateRuntime` 记录 Rule、Product、QA、完成和失败状态，并执行粗粒度 `chat_turn` 检查点。
 - MySQL conversation-product binding hydrate Session 商品引用；PostgreSQL 商品事实只进入当前 Turn。
 - 成功 Turn 在 completed checkpoint 写入后清理文件；失败或中断 checkpoint 保留用于恢复。
+- `AgentRuntime` 和 LangGraph StateGraph skeleton 可执行 `START → session_hydrate →
+  guard → response → END`；Node 返回 `StatePatch` 并通过 `AgentState.apply_patch` 合并。
 
 ### Runtime Boundary
 
@@ -100,7 +103,10 @@ Unified Chat 与 PDD 最终共享同一个 AgentRuntime 和 AgentGraph。Node �
   PostgreSQL-backed product API。
 - 每个 HTTP 请求创建新 `run_id` / `turn_id`；相同 `conversation_id` 复用 `session_id`，但不复用上一轮商品事实快照。
 - 下一轮商品追问仍通过 MySQL binding 得到 `product_id`，并重新读取 PostgreSQL 商品资料。
-- `app/agent/graph.py` 仍是 TODO；Agent Graph / LangGraph 尚未接管 ChatService。
+- Production Unified Chat 仍使用 ChatService，PDD 仍使用 ConsoleRuntime；Agent Graph /
+  LangGraph 尚未接管生产流量。
+- Graph Node lifecycle 目前只在内存中更新；FileCheckpointStore 与每个真实 Node 的
+  持久化对齐属于 G3。
 
 ### Planned For Graph Migration
 
@@ -109,7 +115,7 @@ Unified Chat 与 PDD 最终共享同一个 AgentRuntime 和 AgentGraph。Node �
 - Context Builder / `LLMContextBuilder`。
 - Query Rewrite。
 - Tool Runtime。
-- Full Agent Graph。
+- Production Agent Graph takeover。
 
 ## 4. State Contract
 
