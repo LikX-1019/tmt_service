@@ -42,3 +42,15 @@ This project is indexed by GitNexus as **tmt_service** (2125 symbols, 4398 relat
 | Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->
+
+## Project Architecture Rules
+
+`AGENTS.md` 是完整开发规范的主要 Source of Truth，修改代码前必须同时遵循该文件。
+
+当前处于 **Agent Graph Migration Freeze**：
+
+* 禁止新增非迁移业务。
+* 所有客服 workflow 必须向 AgentGraph 收敛。
+* 不得继续扩大 `ChatService._route_chat()` / `ConsoleRuntime._evaluate_batch()`
+  orchestrator。
+* 迁移状态、阶段和验收条件以 `docs/AGENT_GRAPH_MIGRATION.md` 为准。

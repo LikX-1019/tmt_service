@@ -45,6 +45,194 @@ This project is indexed by GitNexus as **tmt_service** (2125 symbols, 4398 relat
 
 ---
 
+# Agent Graph Architecture Rules
+
+## Rule Priority
+
+后续任务必须按以下优先级解决冲突：
+
+```text
+Security / Data Safety
+        ↓
+Agent Graph Architecture Rules
+        ↓
+GitNexus Impact Rules
+        ↓
+Testing / Validation
+        ↓
+Git Commit / Push
+```
+
+普通任务要求与 Migration Freeze 冲突时，必须优先遵守 Migration Freeze。
+只有用户在当前具体任务中明确要求例外时，才能按该任务的显式授权执行。
+
+## Current Phase
+
+项目正式进入：
+
+```text
+Phase 2 — Unified Agent Graph Migration
+GRAPH_MIGRATION_FREEZE = active
+```
+
+当前真实架构仍以 `ChatService._route_chat()` 和 `ConsoleRuntime._evaluate_batch()`
+作为主要程序式客服编排。`app/agent/` 中的 State、StatePatch、Coordinator 和
+FileCheckpointStore 是迁移基础，但 `app/agent/graph.py` 尚未实现，Agent Graph
+还没有成为主 Runtime。
+
+唯一迁移计划位于 `docs/AGENT_GRAPH_MIGRATION.md`。在迁移验收完成前，默认暂停
+所有非迁移必需的新业务功能开发。
+
+## Freeze Scope
+
+Migration Freeze 解除前，默认禁止新增：
+
+* 新业务流程
+* 新客服渠道业务编排
+* 新 QA 路由分支
+* 新商品路由分支
+* 新售后流程
+* 新 Tool 业务
+* 新 Memory 业务
+* 新 Intent workflow
+* 新自动回复 workflow
+
+允许的例外仅限于：
+
+* 迁移所需基础设施
+* Bug 修复
+* 安全修复
+* 数据安全修复
+* 阻断迁移的问题
+* 测试与可观测性改进
+
+如果用户要求新增上述受限能力，必须先判断该能力能否等待 Graph 基础完成后再实现。
+原则上不得继续扩大 `ChatService._route_chat()`、`ConsoleRuntime._evaluate_batch()`
+或其他旧式 orchestrator。
+
+## Target Architecture
+
+项目最终统一为：
+
+```text
+Channel / API
+      ↓
+AgentRuntime
+      ↓
+Agent Graph
+      ↓
+Node
+      ↓
+Conditional Edge
+      ↓
+Service / Repository / Tool
+      ↓
+Database / LLM / External System
+```
+
+Agent Graph 是客服业务 workflow 的唯一 orchestrator，负责节点顺序、条件分支、
+恢复路径、结束条件、人工路径、Tool 路径、知识路径和商品路径。禁止在 Graph 之外
+建立第二套长期客服业务 orchestrator。
+
+客服决策链路中的 Workflow Step 必须由 Node 表达。Node 读取 `AgentState`，调用
+已有能力，生成明确结果，并返回 `StatePatch`；Node 不得变成新的巨型 Service。
+业务流程分支原则上必须由 Conditional Edge 表达；普通能力内部的小范围条件判断
+不受此限制。
+
+## Graph-first Is Not Node-everything
+
+以下能力应继续保持为普通 Service、Repository、Tool 或 Infrastructure：
+
+* ProductResolver / SemanticProductResolver / ProductRepository
+* ProductAnswerService / QAService / SocialRouter / RuleRegistry
+* ContextualFallbackService / AutoReplyPolicy
+* MessageRepository / ConversationRepository
+* LLMFactory / EmbeddingFactory / VectorStore / Connector
+
+正确关系是：
+
+```text
+Node
+ ↓
+Service
+ ↓
+Repository / Tool
+ ↓
+Infrastructure
+```
+
+例如 `ProductResolveNode` 决定什么时候调用 `ProductResolver` 以及调用后走向哪里；
+`ProductResolver` 继续负责如何解析商品。不要把可复用能力复制进 Node。
+
+## State And Checkpoint
+
+`AgentState`、`ChatSessionState`、`ChatTurnState` 和 `StatePatch` 是唯一 Graph
+State Contract。禁止另建第二套 Graph State。新 Graph Node 优先读取 `AgentState`
+并返回 `StatePatch`，不得直接修改多个全局对象。
+
+必须继续遵守：
+
+* Session State 保存引用和长期运行状态。
+* Turn State 保存当前请求状态。
+* PostgreSQL 保存商品事实。
+* MySQL 保存客服业务事实。
+* Milvus 保存向量知识。
+* Checkpoint 保存 Workflow Runtime。
+
+禁止把完整商品数据长期复制到 Session State，禁止把完整聊天历史无限复制到 State。
+最终 Checkpoint 必须围绕真实 Node 生命周期保存 before node、after node、failed node
+和 resume node 状态，并保留 revision、retry、resume、PendingAction 和 UNCERTAIN
+恢复安全语义。
+
+## Safety And Runtime Convergence
+
+`HumanHandoffRule`、`ComplaintRule` 和 `AfterSaleRiskRule` 等高风险 deterministic
+rules 必须通过 GuardNode 在知识回答、商品生成和通用 LLM 之前运行。现有 Unified
+Chat 中 FAQ exact 先于 Rule 的行为属于迁移事实；必须先建立回归测试，再统一为
+安全优先顺序，不得静默改变行为。
+
+第一版 Graph 保持粗粒度业务 Node，不得为了“Graph 化”拆出几十个无意义 Node。
+最终 Unified Chat 和 PDD 必须经过 Channel Adapter 共享同一个 AgentRuntime 和
+AgentGraph。`ChatService` 最终降级为请求适配、运行上下文管理和响应映射 Facade；
+`ConsoleRuntime` 最终只负责店铺 Runtime、Connector 生命周期、消息接收、发送队列、
+发送结果和渠道状态。
+
+新增客服功能编码前必须先完成 Graph-first 设计检查：
+
+```text
+Workflow            → Graph / Subgraph
+Workflow Step       → Node
+Branch              → Conditional Edge
+Reusable Capability → Service
+External Action     → Tool
+Persistence         → Repository
+```
+
+迁移期间遵循 Behavior-Preserving Migration：先迁移架构，再优化业务。完成某条
+Graph 路径后不得长期保留两套可独立运行的业务逻辑；Migration Acceptance 时旧
+orchestrator 的业务编排职责必须删除或降级为薄适配层。
+
+## Migration Acceptance
+
+只有同时满足以下条件，才能把 `GRAPH_MIGRATION_FREEZE` 从 `active` 改为
+`completed`：
+
+1. `/api/v1/chat` 和 PDD 都经过 AgentRuntime 进入 AgentGraph。
+2. `ChatService` 不再承担业务 workflow，`ConsoleRuntime` 不再承担 AI workflow。
+3. Guard、Social、Intent、Product、FAQ、RAG、Fallback、Human、Response 的主要
+   业务步骤由 Graph Node 表达。
+4. 业务分支主要由 Conditional Edge 表达，StatePatch 成为 Node 状态更新机制。
+5. Checkpoint 与 Node execution 对齐。
+6. Customer Demo 与 PDD 共享相同 Agent Runtime。
+7. 旧 orchestrator 已删除或降级为 adapter。
+8. 相关测试、Ruff 和 GitNexus change analysis 通过，且没有未解释 HIGH/CRITICAL
+   风险。
+9. 架构文档与实际实现一致。
+
+详细阶段与验收边界见 `docs/AGENT_GRAPH_MIGRATION.md`。
+
+---
+
 ## Git 提交与远程同步规则
 
 本仓库要求 Codex 在每次代码修改任务完成后，自动完成 Git 检查、提交，并同步推送到 Gitee 和 GitHub。

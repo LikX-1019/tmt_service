@@ -2,6 +2,38 @@
 
 ## 1. Runtime position
 
+### Current
+
+```text
+ChatService
+    ↓
+RuleRegistry
+```
+
+Unified Chat currently invokes `RuleRegistry` directly inside
+`ChatService._route_chat()`. PDD currently reaches a separate procedural decision
+chain through `ConsoleRuntime._evaluate_batch()`. FAQ exact matching currently runs
+before rules in Unified Chat; this is the recorded behavior and must not be changed
+without the regression baseline required by `docs/AGENT_GRAPH_MIGRATION.md`.
+
+### Target
+
+```text
+AgentGraph
+    ↓
+GuardNode
+    ↓
+RuleRegistry
+    ↓
+Conditional Edge
+```
+
+`RuleRegistry` remains an independent deterministic capability. The Graph decides
+when Guard runs and which path follows the rule result; individual rule patterns must
+not be absorbed into Graph Edge logic. High-risk human/complaint/after-sale rules
+must become a front Guard before knowledge answer, product generation, and generic
+LLM fallback, but only after behavior-preserving tests are in place.
+
 The rule layer is a deterministic safety and context gate in the current unified chat path:
 
 ```text

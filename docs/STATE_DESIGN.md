@@ -35,7 +35,49 @@ AgentState
 
 新代码应优先创建和读取 `AgentState.session` 与 `AgentState.turn`；旧字段仅作为兼容信封和 Coordinator 工作区。
 
-## 3. 当前实现状态
+## 3. Runtime Status
+
+### Current Runtime
+
+```text
+/api/v1/chat
+    ↓
+ChatService
+    ↓
+ChatService._route_chat()
+```
+
+`ChatService` 目前仍承担主要编排，调用 RuleRegistry、SocialRouter、ProductResolver、
+ProductRepository、ProductAnswerService、QAService 和 ContextualFallbackService。
+PDD 当前则由 `ConsoleRuntime._evaluate_batch()` 承担另一套程序式 AI/业务编排。
+
+`ChatStateRuntime` 是旁路 recorder 和恢复契约：它创建 AgentState、记录 Rule、
+Product、QA、完成和失败状态，并执行粗粒度 `chat_turn` 检查点，但不决定业务路由。
+
+### Target Runtime
+
+```text
+Channel / API
+    ↓
+AgentRuntime
+    ↓
+AgentGraph
+    ↓
+Node / Conditional Edge
+    ↓
+Service / Repository / Tool
+```
+
+Unified Chat 与 PDD 最终共享同一个 AgentRuntime 和 AgentGraph。Node 通过
+`StatePatch` 更新 State，Checkpoint 与真实 Node 生命周期对齐。`ChatService` 最终
+降级为 Facade，`ConsoleRuntime` 最终只保留渠道、Connector、发送队列和发送结果
+职责。
+
+### Migration Status
+
+项目处于 **Phase 2 — Unified Agent Graph Migration**，
+`GRAPH_MIGRATION_FREEZE = active`。Agent Graph 尚未完全接管；阶段计划、验收条件
+和回滚边界以 `docs/AGENT_GRAPH_MIGRATION.md` 为准。
 
 ### Implemented
 
@@ -58,7 +100,7 @@ AgentState
 - 下一轮商品追问仍通过 MySQL binding 得到 `product_id`，并重新读取 PostgreSQL 商品资料。
 - `app/agent/graph.py` 仍是 TODO；Agent Graph / LangGraph 尚未接管 ChatService。
 
-### Planned
+### Planned For Graph Migration
 
 - Chat Runtime Integration。
 - Memory Store。
