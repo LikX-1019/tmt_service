@@ -65,3 +65,4 @@ model/
 # Test/runtime artifacts
 .hypothesis/
 .ipynb_checkpoints/
+worklogs/

@@ -3,6 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
+import re
 from urllib.parse import quote_plus
 
 from pydantic import AliasChoices, Field, SecretStr, field_validator
@@ -145,6 +146,12 @@ class Settings(BaseSettings):
     llm_warmup_on_startup: bool = True
     llm_structured_output_method: str = "function_calling"
 
+    worklog_timezone: str = "Asia/Shanghai"
+    worklog_schedule_hour: int = Field(default=17, ge=0, le=23)
+    worklog_schedule_minute: int = Field(default=40, ge=0, le=59)
+    worklog_workspace_roots: str = str(PROJECT_ROOT)
+    worklog_output_dir: Path = PROJECT_ROOT / "worklogs"
+
     embedding_model_path: Path = PROJECT_ROOT / "model" / "bge-m3"
     reranker_model_path: Path = PROJECT_ROOT / "model" / "bge-reranker"
 
@@ -178,6 +185,7 @@ class Settings(BaseSettings):
         "pdd_chrome_profile_root",
         "auto_reply_calibration_path",
         "message_asset_dir",
+        "worklog_output_dir",
     )
     @classmethod
     def resolve_log_dir(cls, value: Path) -> Path:
@@ -263,6 +271,21 @@ class Settings(BaseSettings):
     def model_for(self, agent_type: str) -> str:
         """返回指定业务场景的模型，未单独配置时回退到默认模型。"""
         return self.llm_model_routes.get(agent_type.lower(), self.llm_model)
+
+    @property
+    def workspace_roots(self) -> list[Path]:
+        """把逗号/分号/换行分隔的仓库根目录解析为绝对路径列表。"""
+        tokens = re.split(r"[,;\n\r]+", self.worklog_workspace_roots)
+        roots: list[Path] = []
+        for token in tokens:
+            value = token.strip()
+            if not value:
+                continue
+            path = Path(value).expanduser()
+            path = path if path.is_absolute() else PROJECT_ROOT / path
+            if path not in roots:
+                roots.append(path)
+        return roots or [PROJECT_ROOT]
 
     def safe_summary(self) -> dict[str, Any]:
         """返回可用于启动诊断的非敏感配置，确保不会泄露密钥。"""
