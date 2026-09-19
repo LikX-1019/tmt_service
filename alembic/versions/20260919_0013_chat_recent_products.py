@@ -17,14 +17,21 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # MySQL does not allow server defaults for JSON columns. Add first, backfill,
+    # then enforce NOT NULL so both fresh and existing databases converge safely.
     op.add_column(
         "chat_conversation_products",
-        sa.Column(
-            "recent_products",
-            sa.JSON(),
-            nullable=False,
-            server_default="[]",
-        ),
+        sa.Column("recent_products", sa.JSON(), nullable=True),
+    )
+    op.execute(
+        "UPDATE chat_conversation_products "
+        "SET recent_products = '[]' WHERE recent_products IS NULL"
+    )
+    op.alter_column(
+        "chat_conversation_products",
+        "recent_products",
+        existing_type=sa.JSON(),
+        nullable=False,
     )
 
 
