@@ -91,6 +91,21 @@ def test_relative_log_dir_is_anchored_to_project() -> None:
     assert settings.log_dir == PROJECT_ROOT / "runtime-logs"
 
 
+def test_log_retention_days_defaults_and_environment_override(monkeypatch) -> None:
+    monkeypatch.delenv("LOG_RETENTION_DAYS", raising=False)
+    defaults = Settings(_env_file=None)
+    assert defaults.log_retention_days == 30
+    assert defaults.safe_summary()["log_retention_days"] == 30
+
+    monkeypatch.setenv("LOG_RETENTION_DAYS", "7")
+    assert Settings(_env_file=None).log_retention_days == 7
+
+
+def test_log_retention_days_rejects_non_positive_values() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, log_retention_days=0)
+
+
 def test_model_route_falls_back_to_default() -> None:
     settings = Settings(
         _env_file=None,

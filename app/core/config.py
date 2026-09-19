@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     )
     log_level: str = "INFO"
     log_dir: Path = PROJECT_ROOT / "logs"
+    log_retention_days: int = Field(default=30, ge=1)
     default_tenant_id: str = "tenant_default"
     default_shop_name: str = "拼多多店铺"
 
@@ -270,6 +271,7 @@ class Settings(BaseSettings):
             "app_debug": self.app_debug,
             "log_level": self.log_level,
             "log_dir": str(self.log_dir),
+            "log_retention_days": self.log_retention_days,
             "mysql_host": self.mysql_host,
             "milvus_uri": self.milvus_uri,
             "milvus_collection": self.milvus_collection,

@@ -13,6 +13,7 @@ from app.agent.greeting import default_reply_templates, default_trigger_groups
 from app.agent.routing import CustomerServiceRouter
 from app.agent.service import CustomerContext, CustomerServiceAgent
 from app.core.config import Settings, get_settings
+from app.core.logging import create_log_task
 from app.core.exceptions import (
     ConsoleUnavailableError,
     InvalidRequestError,
@@ -150,8 +151,10 @@ class ConsoleRuntime:
                         self._asset_storage.delete(storage_key)
                     except Exception:
                         logger.exception("message_asset_cleanup_failed", extra={"event": "message_asset_cleanup_failed"})
-                self._worker = asyncio.create_task(
-                    self._send_worker(), name="console-send-worker"
+                self._worker = create_log_task(
+                    self._send_worker(),
+                    name="console-send-worker",
+                    shop_id=self._shop_id,
                 )
                 self._initialized = True
             except Exception as exc:
@@ -368,9 +371,11 @@ class ConsoleRuntime:
         previous = self._debounces.pop(conversation_id, None)
         if previous:
             previous.cancel()
-        self._debounces[conversation_id] = asyncio.create_task(
+        self._debounces[conversation_id] = create_log_task(
             self._evaluate_after_delay(conversation_id),
             name=f"auto-reply-{conversation_id}",
+            shop_id=self._shop_id,
+            conversation_id=conversation_id,
         )
 
     async def _evaluate_after_delay(self, conversation_id: str) -> None:

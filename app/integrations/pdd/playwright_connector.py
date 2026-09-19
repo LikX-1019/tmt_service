@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import Settings, get_settings
+from app.core.logging import create_log_task
 from app.integrations.pdd.base import (
     ConnectorError,
     ConversationNotVisibleError,
@@ -246,7 +247,11 @@ class PddPlaywrightConnector(CustomerServiceConnector):
                     timeout=15000,
                 )
             await self._scan_once(initial=True)
-            self._poll_task = asyncio.create_task(self._poll_loop(), name="pdd-dom-poller")
+            self._poll_task = create_log_task(
+                self._poll_loop(),
+                name="pdd-dom-poller",
+                shop_id=self._shop_id,
+            )
             return self._snapshot
         except Exception as exc:
             logger.exception("pdd_connector_start_failed", extra={"event": "pdd_connector_start_failed"})

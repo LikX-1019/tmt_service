@@ -10,6 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.core.config import Settings, get_settings
+from app.core.logging import create_log_task
 from app.core.exceptions import (
     InvalidRequestError,
     ResourceNotFoundError,
@@ -90,9 +91,10 @@ class ShopRuntimeManager:
         current = self._restart_tasks.get(shop_id)
         if current is not None and not current.done():
             return
-        self._restart_tasks[shop_id] = asyncio.create_task(
+        self._restart_tasks[shop_id] = create_log_task(
             self._restart_after_failure(shop_id),
             name=f"restart-shop-{shop_id}",
+            shop_id=shop_id,
         )
 
     async def _restart_after_failure(self, shop_id: str) -> None:
@@ -325,8 +327,10 @@ class ShopRuntimeManager:
         runtime = self._runtimes.get(shop_id)
         if duplicate_id is not None:
             if runtime is not None:
-                asyncio.create_task(
-                    runtime.stop_connector(), name=f"stop-duplicate-shop-{shop_id}"
+                create_log_task(
+                    runtime.stop_connector(),
+                    name=f"stop-duplicate-shop-{shop_id}",
+                    shop_id=shop_id,
                 )
             event = await self.repository.add_event(
                 "shop.duplicate",

@@ -256,15 +256,28 @@ schema 字段不兼容时脚本会拒绝复用，需提升 `MILVUS_COLLECTION` �
 
 ## 日志定位
 
-每个服务进程启动时生成两个带时间和进程号的文件：
+日志按本地日期写入统一目录，服务运行中跨天自动切换，无需重启：
 
-- `logs/app-YYYYMMDD-HHMMSS-PID.log`：全部日志
-- `logs/error-YYYYMMDD-HHMMSS-PID.log`：仅 ERROR 及以上日志
+- `logs/YYYY-MM-DD/app.log`：全部日志
+- `logs/YYYY-MM-DD/error.log`：仅 ERROR 及以上日志
+- `logs/YYYY-MM-DD/access.log`：HTTP 访问日志
+- `logs/YYYY-MM-DD/qa.log`：QA/RAG 日志
+- `logs/YYYY-MM-DD/connector.log`：PDD/Console 连接器日志
+- `logs/YYYY-MM-DD/audit.log`：预留审计日志
 
-文件内容采用 JSON Lines。每条记录包含 `timestamp`、`level`、`logger`、
-`source_file`、`source_line`、`source_function` 和 `request_id`。HTTP 响应头
-会返回 `X-Request-ID`；用它在日志中搜索即可串起一次请求。错误记录包含完整
-`traceback`，但客户端只收到统一错误信息，不会看到 Python 堆栈。
+日期目录默认保留 30 天，可用 `LOG_RETENTION_DAYS` 调整。文件内容采用 JSON
+Lines。每条记录包含 `timestamp`、`level`、`logger`、`module`、`request_id`、
+`trace_id`、`conversation_id`、`shop_id`、`source_file`、`source_line` 和
+`source_function`。HTTP 响应头会返回 `X-Request-ID` 与 `X-Trace-ID`；未显式传入
+trace 时二者相同。错误记录包含完整 `traceback`，但客户端只收到统一错误信息，
+不会看到 Python 堆栈。密码、Token、Authorization、Cookie 等敏感字段会在日志层
+统一脱敏，访问日志也不记录请求体或查询参数。
+
+```bash
+# 先按会话定位，再按单次请求缩小范围
+rg -F '"conversation_id":"conv-123"' logs/YYYY-MM-DD
+rg -F '"request_id":"req-123"' logs/YYYY-MM-DD
+```
 
 ## 测试
 
