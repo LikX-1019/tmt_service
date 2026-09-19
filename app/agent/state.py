@@ -56,7 +56,16 @@ class ActionStatus(StrEnum):
     UNCERTAIN = "uncertain"
 
 
-ChatRoute = Literal["faq", "rag", "tool", "human", "greeting", "fallback"]
+ChatRoute = Literal[
+    "faq",
+    "rag",
+    "tool",
+    "human",
+    "greeting",
+    "fallback",
+    "product",
+    "product_selection",
+]
 RiskLevel = Literal["low", "medium", "high"]
 ServiceStage = Literal["pre_sale", "post_sale", "general"]
 
@@ -377,7 +386,7 @@ class ChatTurnState(BaseModel):
     rewrite_applied: bool = False
     product: ProductResolutionState = Field(default_factory=ProductResolutionState)
     intent: str | None = None
-    route: Literal["faq", "rag", "tool", "human", "greeting", "fallback"] | None = None
+    route: ChatRoute | None = None
     retrieval: RetrievalState = Field(default_factory=RetrievalState)
     tool: ToolState = Field(default_factory=ToolState)
     human: HumanState = Field(default_factory=HumanState)

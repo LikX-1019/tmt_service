@@ -2,6 +2,7 @@ from typing import Any
 
 import pytest
 
+from app.agent.chat_runtime import ChatStateRuntime
 from app.core.config import Settings
 from app.core.exceptions import ProductServiceUnavailableError
 from app.qa.models import QAResult, QASource
@@ -91,12 +92,13 @@ class FakeProductAnswers:
 
 
 class FakeQA:
-    def __init__(self) -> None:
+    def __init__(self, result: QAResult | None = None) -> None:
         self.calls = 0
+        self.result = result
 
     async def answer(self, *_args: Any, **_kwargs: Any) -> QAResult:
         self.calls += 1
-        return QAResult(
+        return self.result or QAResult(
             answer="QA 回答",
             route="faq",
             confidence=1.0,
@@ -108,6 +110,8 @@ def make_service(
     *,
     products: FakeProducts | None = None,
     conversations: FakeConversations | None = None,
+    qa: FakeQA | None = None,
+    state_runtime: ChatStateRuntime | None = None,
 ) -> tuple[ChatService, FakeProducts, FakeProductAnswers, FakeQA, FakeConversations]:
     products = products or FakeProducts(
         {
@@ -123,7 +127,7 @@ def make_service(
     )
     conversations = conversations or FakeConversations()
     answers = FakeProductAnswers()
-    qa = FakeQA()
+    qa = qa or FakeQA()
 
     async def qa_provider() -> FakeQA:
         return qa
@@ -136,6 +140,7 @@ def make_service(
         product_resolver=ProductResolver(
             Settings(_env_file=None, product_api_base_url="http://127.0.0.1:8088")
         ),
+        state_runtime=state_runtime,
     )
     return service, products, answers, qa, conversations
 

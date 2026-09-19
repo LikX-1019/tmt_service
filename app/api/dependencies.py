@@ -7,6 +7,8 @@ from functools import lru_cache
 
 from fastapi import Request
 
+from app.agent.chat_runtime import ChatStateRuntime
+from app.agent.checkpoint import FileCheckpointStore
 from app.core.config import get_settings
 from app.database.session import get_session_factory
 from app.core.exceptions import ConsoleUnavailableError
@@ -36,6 +38,7 @@ def get_chat_service() -> ChatService:
         conversation_repository=ConversationProductRepository(get_session_factory()),
         product_repository=ProductRepository(),
         qa_provider=get_qa_service,
+        state_runtime=ChatStateRuntime(FileCheckpointStore()),
     )
 
 

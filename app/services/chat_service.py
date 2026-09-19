@@ -6,6 +6,8 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from app.agent.chat_runtime import ChatStateRuntime
+from app.agent.state import AgentState
 from app.core.exceptions import AppException, LLMInvocationError, ProductServiceUnavailableError
 from app.models.chat import ChatConversationProduct
 from app.qa.models import QAResult
@@ -60,6 +62,7 @@ class ChatService:
         product_answer_service: ProductAnswerService | None = None,
         qa_provider: Callable[[], Awaitable[QAService]] | None = None,
         product_resolver: ProductResolver | None = None,
+        state_runtime: ChatStateRuntime | None = None,
     ) -> None:
         self._rules = rule_registry or default_rule_registry()
         self._conversations = conversation_repository
@@ -67,9 +70,41 @@ class ChatService:
         self._product_answers = product_answer_service or ProductAnswerService()
         self._qa_provider = qa_provider
         self._product_resolver = product_resolver or ProductResolver()
+        self._state_runtime = state_runtime or ChatStateRuntime()
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
+        state = self._state_runtime.create_state(
+            message=request.message,
+            conversation_id=request.conversation_id,
+            customer_id=request.customer_id,
+            service_stage=request.service_stage,
+        )
+        try:
+            await self._state_runtime.start(state)
+            response = await self._route_chat(request, state)
+            await self._state_runtime.complete(state, response)
+            return response
+        except Exception as exc:
+            try:
+                await self._state_runtime.fail(state, exc)
+            except Exception:
+                logger.exception(
+                    "chat_state_failure_checkpoint_failed",
+                    extra={
+                        "event": "chat_state_failure_checkpoint_failed",
+                        "run_id": state.run_id,
+                    },
+                )
+            raise
+
+    async def _route_chat(
+        self,
+        request: ChatRequest,
+        state: AgentState,
+    ) -> ChatResponse:
         binding = await self._load_binding(request.conversation_id)
+        if binding is not None and binding.product_id:
+            self._state_runtime.hydrate_product_binding(state, binding.product_id)
         rule_result = self._rules.evaluate(
             request.message,
             RuleContext(
@@ -80,6 +115,7 @@ class ChatService:
                 channel="unified_chat",
             ),
         )
+        self._state_runtime.record_rule(state, rule_result)
 
         terminal = rule_result.terminal_decision
         if terminal is not None and terminal.fixed_reply:
@@ -113,7 +149,12 @@ class ChatService:
                 product_intent=rule_result.requires_product,
             )
         if name_query is not None:
-            name_response = await self._resolve_product_name(request, name_query, rule_result)
+            name_response = await self._resolve_product_name(
+                request,
+                name_query,
+                rule_result,
+                state,
+            )
             if name_response is not None:
                 return name_response
 
@@ -135,6 +176,13 @@ class ChatService:
 
         product_question = explicit_product or rule_result.requires_product
 
+        if product_question and resolution.product_id is not None:
+            self._state_runtime.record_product_pending(
+                state,
+                product_id=resolution.product_id,
+                source=resolution.source,
+            )
+
         if product_question and resolution.product_id is None:
             return ChatResponse(
                 conversation_id=request.conversation_id,
@@ -146,7 +194,7 @@ class ChatService:
             )
 
         if not product_question:
-            return await self._answer_with_qa(request)
+            return await self._answer_with_qa(request, state)
 
         assert self._products is not None
         assert resolution.product_id is not None
@@ -155,6 +203,7 @@ class ChatService:
         except ProductNotFoundError:
             if resolution.source == "conversation":
                 await self._clear_binding_if_present(request.conversation_id)
+                self._state_runtime.clear_product_binding(state)
             return ChatResponse(
                 conversation_id=request.conversation_id,
                 answer=(
@@ -171,6 +220,11 @@ class ChatService:
             raise ProductServiceUnavailableError() from exc
 
         await self._bind_product(request.conversation_id, product)
+        self._state_runtime.record_product_resolved(
+            state,
+            product,
+            source=resolution.source,
+        )
         try:
             answer = await self._product_answers.answer(
                 request.message,
@@ -202,7 +256,11 @@ class ChatService:
             return
         await self._conversations.clear_binding(conversation_id)
 
-    async def _answer_with_qa(self, request: ChatRequest) -> ChatResponse:
+    async def _answer_with_qa(
+        self,
+        request: ChatRequest,
+        state: AgentState,
+    ) -> ChatResponse:
         if self._qa_provider is None:
             raise RuntimeError("QA provider is not configured")
         qa_service = await self._qa_provider()
@@ -210,6 +268,7 @@ class ChatService:
             request.message,
             service_stage=request.service_stage,
         )
+        self._state_runtime.record_qa(state, result)
         return ChatResponse(
             conversation_id=request.conversation_id,
             answer=result.answer,
@@ -234,6 +293,7 @@ class ChatService:
         request: ChatRequest,
         query: str,
         rule_result: Any,
+        state: AgentState,
     ) -> ChatResponse | None:
         assert self._products is not None
         try:
@@ -266,6 +326,11 @@ class ChatService:
             except ProductLookupError as exc:
                 raise ProductServiceUnavailableError() from exc
             await self._bind_product(request.conversation_id, product)
+            self._state_runtime.record_product_resolved(
+                state,
+                product,
+                source="name_exact",
+            )
             try:
                 answer = await self._product_answers.answer(
                     request.message,

@@ -1,9 +1,9 @@
 # State Contract v2
 
 本文定义客服 Agent 的可序列化状态契约。当前仓库已经实现 State Contract v2 的模型、
-序列化、文件检查点、恢复协调和 PendingAction 安全语义；但它尚未正式接入
-`POST /api/v1/chat` 的 runtime lifecycle。当前 unified chat 多轮商品上下文主要仍依赖
-`conversation_id` 和 MySQL `chat_conversation_products`。
+序列化、文件检查点、恢复协调和 PendingAction 安全语义，并已将最小 State Runtime
+接入 `POST /api/v1/chat`。Unified Chat 的多轮商品事实仍以 `conversation_id` 和 MySQL
+`chat_conversation_products` 为持久化绑定来源；Checkpoint 只负责单次 Turn 恢复。
 
 ## 1. 核心原则
 
@@ -45,13 +45,18 @@ AgentState
 - `FileCheckpointStore` 原子 JSON 检查点、revision 冲突检测和可恢复状态枚举。
 - `StateCoordinator` 节点前后检查点、retryable failure resume、running node resume 和 pending action safety。
 - `PendingAction` 在 `EXECUTING` 或 `UNCERTAIN` 恢复时转人工，避免重复发送、重复退款或重复取消订单。
+- `/api/v1/chat` 每次请求创建独立 `AgentState`、`ChatSessionState` 和 `ChatTurnState`。
+- `ChatStateRuntime` 记录 Rule、Product、QA、完成和失败状态，并执行粗粒度 `chat_turn` 检查点。
+- MySQL conversation-product binding hydrate Session 商品引用；PostgreSQL 商品事实只进入当前 Turn。
+- 成功 Turn 在 completed checkpoint 写入后清理文件；失败或中断 checkpoint 保留用于恢复。
 
-### Not Integrated Yet
+### Runtime Boundary
 
-- `POST /api/v1/chat` 还不是由 `Load ChatSessionState → Create ChatTurnState → Rule → Product → QA → Persist State` 驱动。
-- `ChatService` 当前直接执行 `RuleRegistry → ProductResolver/ProductRepository → QAService`，没有加载或保存 `ChatSessionState` / `ChatTurnState`。
-- 当前多轮商品上下文由 `conversation_id` + MySQL `chat_conversation_products` 持久化绑定提供，不是由 Session State 的 `current_product` 提供。
-- `app/agent/graph.py` 仍是 TODO，Agent Graph / LangGraph 尚未接管 ChatService。
+- `ChatService` 仍负责稳定的 `RuleRegistry → ProductResolver/ProductRepository → QAService` 业务顺序。
+- `ChatStateRuntime` 是旁路运行记录和恢复契约，不参与业务决策，也不替代 MySQL/PostgreSQL。
+- 每个 HTTP 请求创建新 `run_id` / `turn_id`；相同 `conversation_id` 复用 `session_id`，但不复用上一轮商品事实快照。
+- 下一轮商品追问仍通过 MySQL binding 得到 `product_id`，并重新读取 PostgreSQL 商品资料。
+- `app/agent/graph.py` 仍是 TODO；Agent Graph / LangGraph 尚未接管 ChatService。
 
 ### Planned
 
@@ -219,13 +224,16 @@ AgentState
 
 ## 5. 商品上下文流
 
-本节描述 State Runtime 接入后的目标流，不是当前 `/api/v1/chat` 的实际执行路径。
-当前实际路径是：
+当前 `/api/v1/chat` 的第一阶段 State Runtime 路径是：
 
 ```text
 POST /api/v1/chat
         ↓
-ChatService
+Create AgentState / Session / Turn
+        ↓
+initial + before:chat_turn checkpoint
+        ↓
+ChatService + ChatStateRuntime recorder
         ↓
 RuleRegistry
         ↓
@@ -238,13 +246,15 @@ product_id
 PostgreSQL product_api_profiles
         ↓
 ProductAnswer
+        ↓
+completed checkpoint + cleanup
 ```
 
 `chat_conversation_products` 是持久化 conversation-product binding；`ChatSessionState.current_product`
 是 State Contract 中的运行时 `ProductReference`。两者都只应保存商品引用，不是商品事实的
 Source of Truth。
 
-目标 State Runtime 流程：
+后续完整 Agent Runtime 目标流程：
 
 ```text
 User: “这个怎么使用？”
@@ -298,9 +308,9 @@ State 不是 Prompt。未来 `LLMContextBuilder` 输入 `ChatSessionState`、`Ch
 | 客服会话和顾客关系 | MySQL `conversations` / `customers` |
 | 当前统一 Chat 商品绑定 | MySQL `chat_conversation_products` |
 | session_id | Session State / DB；当前 `/api/v1/chat` 使用 `conversation_id` |
-| turn_id | Turn State / DB；当前 `/api/v1/chat` 未创建 `ChatTurnState` |
+| turn_id | Turn State / Checkpoint；当前 `/api/v1/chat` 每次请求生成新 ID |
 | message_id | MySQL `messages` |
-| 当前 product_id / sku_id | Session State `ProductReference`；当前 unified chat 使用 conversation binding |
+| 当前 product_id / sku_id | MySQL binding hydrate Session State `ProductReference` |
 | 商品完整资料 | PostgreSQL `products` / `product_variants` / `product_api_profiles` |
 | 当前商品快照 | Turn State |
 | 最近消息 ID | ShortTermMemoryState |

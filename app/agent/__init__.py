@@ -1,6 +1,7 @@
 """客服 Agent 状态、检查点与流程协调公共接口。"""
 
 from app.agent.checkpoint import FileCheckpointStore
+from app.agent.chat_runtime import ChatStateRuntime
 from app.agent.coordinator import StateCoordinator
 from app.agent.state import (
     ActionStatus,
@@ -33,6 +34,7 @@ __all__ = [
     "ActionStatus",
     "AgentState",
     "ChatSessionState",
+    "ChatStateRuntime",
     "ChatTurnState",
     "FileCheckpointStore",
     "HumanState",
