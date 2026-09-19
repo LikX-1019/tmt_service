@@ -87,27 +87,59 @@ class ParsedCatalog:
 
 def _style_sheet(sheet, columns: list[tuple[str, str, str, Any]], *, example: bool = False) -> None:
     header_fill = PatternFill("solid", fgColor="126B57")
-    required_fill = PatternFill("solid", fgColor="0E5948")
+    required_fill = PatternFill("solid", fgColor="B42318")
+    required_input_fill = PatternFill("solid", fgColor="FFF8E1")
     sample_fill = PatternFill("solid", fgColor="FFF4D6")
     border = Border(bottom=Side(style="thin", color="D9E0E3"))
+    sample_border = Border(bottom=Side(style="thin", color="D9E0E3"))
+    number_formats = {
+        "价格": "0.00",
+        "库存数量": "0",
+        "生效时间": "yyyy-mm-dd hh:mm",
+        "发布时间": "yyyy-mm-dd hh:mm",
+    }
+    sheet.sheet_view.showGridLines = False
     sheet.freeze_panes = "A2"
     sheet.auto_filter.ref = f"A1:{get_column_letter(len(columns))}1"
-    sheet.row_dimensions[1].height = 30
+    sheet.row_dimensions[1].height = 34
     for index, (title, _key, description, sample) in enumerate(columns, start=1):
         cell = sheet.cell(1, index, title)
-        cell.fill = required_fill if title.endswith("*") else header_fill
-        cell.font = Font(color="FFFFFF", bold=True)
-        cell.alignment = Alignment(horizontal="center", vertical="center")
+        required = title.endswith("*")
+        cell.fill = required_fill if required else header_fill
+        cell.font = Font(name="Arial", size=10, color="FFFFFF", bold=True)
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = Border(
+            left=Side(style="thin", color="FFFFFF"),
+            bottom=Side(style="medium", color="FFFFFF"),
+        )
         cell.comment = None
-        width = max(14, min(36, max(len(title) * 2, len(description) // 2)))
+        width = max(14, min(40, max(len(title) * 2, len(description) // 2)))
         sheet.column_dimensions[get_column_letter(index)].width = width
         if example:
             sample_cell = sheet.cell(2, index, sample)
             sample_cell.fill = sample_fill
-            sample_cell.border = border
+            sample_cell.border = sample_border
+            sample_cell.font = Font(name="Arial", size=10)
             sample_cell.alignment = Alignment(vertical="top", wrap_text=True)
+            if title in number_formats:
+                sample_cell.number_format = number_formats[title]
+        else:
+            for row in range(2, MAX_IMPORT_ROWS + 2):
+                input_cell = sheet.cell(row, index)
+                input_cell.font = Font(name="Arial", size=10)
+                input_cell.alignment = Alignment(vertical="top", wrap_text=True)
+                input_cell.border = border
+                if title in number_formats:
+                    input_cell.number_format = number_formats[title]
+                if required:
+                    input_cell.fill = required_input_fill
     if example:
-        sheet.row_dimensions[2].height = 76
+        sheet.row_dimensions[2].height = 86
+    else:
+        legend_cell = sheet.cell(1, len(columns) + 2, "说明：带 * 的红色表头为必填；浅黄色输入列不能留空，漏填会自动变红。")
+        legend_cell.font = Font(name="Arial", size=9, italic=True, color="66717E")
+        legend_cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        sheet.column_dimensions[get_column_letter(len(columns) + 2)].width = 46
 
 
 def _add_validations(sheet, product: bool) -> None:
@@ -120,54 +152,107 @@ def _add_validations(sheet, product: bool) -> None:
         validation = DataValidation(type="list", formula1=formula, allow_blank=True)
         validation.error = "请选择下拉列表中的值"
         validation.errorTitle = "填写值无效"
+        validation.promptTitle = "下拉选择"
+        validation.prompt = "请选择列表中列出的值；留空时使用系统默认值。"
+        validation.showInputMessage = True
         sheet.add_data_validation(validation)
         validation.add(f"{column}2:{column}{MAX_IMPORT_ROWS + 1}")
     required_columns = [1, 5, 9] if product else [1, 2, 3]
     red_fill = PatternFill("solid", fgColor="FDE9E7")
+    required_validation = DataValidation(
+        type="textLength",
+        operator="greaterThan",
+        formula1="0",
+        allow_blank=False,
+    )
+    required_validation.error = "必填字段不能留空"
+    required_validation.errorTitle = "缺少必填内容"
+    required_validation.promptTitle = "必填字段"
+    required_validation.prompt = "请填写内容；导入前系统还会整体校验一次。"
+    required_validation.showInputMessage = True
+    sheet.add_data_validation(required_validation)
     for column in required_columns:
         letter = get_column_letter(column)
+        required_validation.add(f"{letter}2:{letter}{MAX_IMPORT_ROWS + 1}")
         sheet.conditional_formatting.add(
             f"{letter}2:{letter}{MAX_IMPORT_ROWS + 1}",
-            FormulaRule(formula=[f'LEN(TRIM({letter}2))=0'], fill=red_fill),
+            FormulaRule(
+                formula=[f'LEN(TRIM({letter}2))=0'],
+                fill=red_fill,
+                font=Font(color="B42318", bold=True),
+                stopIfTrue=True,
+            ),
         )
 
 
 def build_template() -> bytes:
     workbook = Workbook()
+    workbook.properties.title = "商品资料批量导入模板"
+    workbook.properties.creator = "商品资料管理系统"
     product_sheet = workbook.active
     product_sheet.title = PRODUCT_SHEET
+    product_sheet.sheet_properties.tabColor = "126B57"
     _style_sheet(product_sheet, PRODUCT_COLUMNS)
     _add_validations(product_sheet, product=True)
 
     variant_sheet = workbook.create_sheet(VARIANT_SHEET)
+    variant_sheet.sheet_properties.tabColor = "2765A8"
     _style_sheet(variant_sheet, VARIANT_COLUMNS)
     _add_validations(variant_sheet, product=False)
 
     example_sheet = workbook.create_sheet(EXAMPLE_SHEET)
+    example_sheet.sheet_properties.tabColor = "8A5B08"
     _style_sheet(example_sheet, PRODUCT_COLUMNS, example=True)
-    example_sheet["A4"] = "SKU 示例（请填写到 SKU导入 工作表）"
-    example_sheet["A4"].font = Font(bold=True, color="126B57")
+    example_sheet["A3"] = "上表为商品示例；实际导入请填写到“商品导入”工作表。"
+    example_sheet["A3"].font = Font(name="Arial", size=9, italic=True, color="66717E")
+    example_sheet["A5"] = "SKU 示例（请填写到 SKU导入 工作表）"
+    example_sheet["A5"].font = Font(name="Arial", size=10, bold=True, color="126B57")
     for index, (title, _key, _description, sample) in enumerate(VARIANT_COLUMNS, start=1):
-        example_sheet.cell(5, index, title).font = Font(bold=True, color="FFFFFF")
-        example_sheet.cell(5, index).fill = PatternFill("solid", fgColor="126B57")
-        example_sheet.cell(6, index, sample).fill = PatternFill("solid", fgColor="FFF4D6")
-        example_sheet.cell(6, index).alignment = Alignment(wrap_text=True, vertical="top")
+        header_cell = example_sheet.cell(6, index, title)
+        header_cell.fill = PatternFill("solid", fgColor="B42318" if title.endswith("*") else "126B57")
+        header_cell.font = Font(name="Arial", size=10, color="FFFFFF", bold=True)
+        header_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        sample_cell = example_sheet.cell(7, index, sample)
+        sample_cell.fill = PatternFill("solid", fgColor="FFF4D6")
+        sample_cell.font = Font(name="Arial", size=10)
+        sample_cell.alignment = Alignment(wrap_text=True, vertical="top")
+    example_sheet.row_dimensions[6].height = 34
+    example_sheet.row_dimensions[7].height = 76
 
     help_sheet = workbook.create_sheet(HELP_SHEET)
+    help_sheet.sheet_properties.tabColor = "66717E"
+    help_sheet.sheet_view.showGridLines = False
     help_sheet.append(["工作表", "字段", "是否必填", "填写规则", "示例"])
     for cell in help_sheet[1]:
         cell.fill = PatternFill("solid", fgColor="126B57")
-        cell.font = Font(color="FFFFFF", bold=True)
+        cell.font = Font(name="Arial", size=10, color="FFFFFF", bold=True)
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     for sheet_name, columns in ((PRODUCT_SHEET, PRODUCT_COLUMNS), (VARIANT_SHEET, VARIANT_COLUMNS)):
         for title, _key, description, sample in columns:
-            help_sheet.append([sheet_name, title.rstrip("*"), "是" if title.endswith("*") else "否", description, sample])
+            help_sheet.append([sheet_name, title, "必填" if title.endswith("*") else "选填", description, sample])
     help_sheet.freeze_panes = "A2"
     help_sheet.auto_filter.ref = f"A1:E{help_sheet.max_row}"
-    for column, width in {"A": 14, "B": 20, "C": 12, "D": 54, "E": 42}.items():
+    help_sheet.row_dimensions[1].height = 30
+    for column, width in {"A": 14, "B": 22, "C": 12, "D": 54, "E": 42, "G": 50}.items():
         help_sheet.column_dimensions[column].width = width
-    for row in help_sheet.iter_rows(min_row=2):
+    for row_number, row in enumerate(help_sheet.iter_rows(min_row=2), start=2):
+        help_sheet.row_dimensions[row_number].height = 52
         for cell in row:
+            cell.font = Font(name="Arial", size=10)
             cell.alignment = Alignment(vertical="top", wrap_text=True)
+            cell.border = Border(bottom=Side(style="thin", color="E4E9EC"))
+            if row_number % 2 == 0:
+                cell.fill = PatternFill("solid", fgColor="F6F9F8")
+        required_cell = row[2]
+        if required_cell.value == "必填":
+            required_cell.font = Font(name="Arial", size=10, color="B42318", bold=True)
+            required_cell.alignment = Alignment(horizontal="center", vertical="top")
+        else:
+            required_cell.font = Font(name="Arial", size=10, color="66717E")
+            required_cell.alignment = Alignment(horizontal="center", vertical="top")
+    legend_cell = help_sheet.cell(1, 7, "说明：带 * 的字段为必填；实际导入请填写“商品导入”和“SKU导入”工作表。")
+    legend_cell.font = Font(name="Arial", size=9, italic=True, color="66717E")
+    legend_cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
 
     output = BytesIO()
     workbook.save(output)
@@ -225,10 +310,13 @@ def _headers(sheet) -> dict[str, int]:
     return {_text(cell.value).rstrip("*"): index for index, cell in enumerate(sheet[1]) if _text(cell.value)}
 
 
-def _row_values(sheet, row: int, columns: list[tuple[str, str, str, Any]]) -> dict[str, Any]:
-    headers = _headers(sheet)
+def _row_values(
+    values: tuple[Any, ...],
+    columns: list[tuple[str, str, str, Any]],
+    headers: dict[str, int],
+) -> dict[str, Any]:
     return {
-        key: sheet.cell(row, headers[title.rstrip("*")] + 1).value if title.rstrip("*") in headers else None
+        key: values[headers[title.rstrip("*")]] if title.rstrip("*") in headers else None
         for title, key, _description, _sample in columns
     }
 
@@ -262,10 +350,12 @@ def parse_catalog(content: bytes) -> ParsedCatalog:
         result.errors.append(ImportErrorItem(PRODUCT_SHEET, 0, f"单次最多导入 {MAX_IMPORT_ROWS} 件商品"))
         return result
 
+    product_headers = _headers(product_sheet)
     seen_product_ids: set[str] = set()
     seen_internal_codes: dict[str, int] = {}
-    for row in range(2, product_sheet.max_row + 1):
-        raw = _row_values(product_sheet, row, PRODUCT_COLUMNS)
+    product_rows = product_sheet.iter_rows(min_row=2, values_only=True)
+    for row, values in enumerate(product_rows, start=2):
+        raw = _row_values(values, PRODUCT_COLUMNS, product_headers)
         if not any(_text(value) for value in raw.values()):
             continue
         try:
@@ -322,9 +412,11 @@ def parse_catalog(content: bytes) -> ParsedCatalog:
         if variant_sheet.max_row - 1 > MAX_IMPORT_ROWS:
             result.errors.append(ImportErrorItem(VARIANT_SHEET, 0, f"单次最多导入 {MAX_IMPORT_ROWS} 个 SKU"))
             return result
+        variant_headers = _headers(variant_sheet)
         seen_skus: set[str] = set()
-        for row in range(2, variant_sheet.max_row + 1):
-            raw = _row_values(variant_sheet, row, VARIANT_COLUMNS)
+        variant_rows = variant_sheet.iter_rows(min_row=2, values_only=True)
+        for row, values in enumerate(variant_rows, start=2):
+            raw = _row_values(values, VARIANT_COLUMNS, variant_headers)
             if not any(_text(value) for value in raw.values()):
                 continue
             try:
