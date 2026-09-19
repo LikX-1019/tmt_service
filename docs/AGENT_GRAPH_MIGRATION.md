@@ -45,9 +45,9 @@ GitNexus 当前调用关系确认：
 | `ConsoleRuntime._evaluate_batch` | `ConsoleRuntime._evaluate_after_delay` → `ConsoleRuntime._on_message` | `_on_message`，7 traced process paths | LOW |
 
 已有迁移基础包括 `AgentState`、`ChatSessionState`、`ChatTurnState`、`StatePatch`、
-`StateCoordinator`、`FileCheckpointStore`、`ChatStateRuntime`、若干 Node/Edge 文件
-和 PendingAction 安全语义。但 `app/agent/graph.py` 目前仍是 TODO，Agent Graph 没有
-可执行主图，也没有接管 Unified Chat 或 PDD。
+`StateCoordinator`、`FileCheckpointStore`、`ChatStateRuntime` 和 PendingAction
+安全语义。`app/agent/nodes/*`、`app/agent/edges/*` 与 `app/agent/graph.py` 目前
+都是 TODO 占位；Agent Graph 没有可执行主图，也没有接管 Unified Chat 或 PDD。
 
 ## Target Architecture
 
@@ -98,13 +98,25 @@ baseline，也禁止在同一个阶段混合多个不相关业务重写。
 
 | Item | Boundary |
 |---|---|
-| Status | `NOT_STARTED` |
+| Status | `COMPLETED` |
 | Goal | 固化 Unified Chat 与 PDD 的真实输入、输出、路由、状态和副作用行为。 |
 | Scope | 只读取现有实现；新增 characterization/regression tests 和测试 fixture；可补充观测字段，但不改变业务决策。 |
 | Prohibited | 重写业务规则；迁移 Graph；修改数据库契约；扩大旧 orchestrator。 |
 | Tests | 新增 Unified Chat characterization tests；PDD multiroute/auto-reply tests；State/checkpoint contract tests。 |
 | Acceptance | 商品绑定、URL、ID、名称匹配、候选、历史商品、语义指代、Greeting、Courtesy、Social、FAQ Exact、RAG、Fallback、Human Handoff、PDD Auto Reply、Checkpoint、Debug Fields 和 Logging Context 均有可重复断言。 |
 | Rollback | 删除新增测试/fixture，不产生 Runtime 行为变化。 |
+
+G0 基线结果见 `docs/AGENT_GRAPH_G0_BASELINE.md`。要点：
+
+* Start commit：`378cfeb`；分支：`master`；working tree 开始时 clean。
+* GitNexus index：4,724 nodes / 10,209 edges / 345 flows。
+* Full regression：`uv run pytest -q` 通过，439 passed。
+* 未新增业务代码或 characterization test；现有 439 个测试成为迁移回归入口。
+* Unified Chat、PDD Runtime、capability、orchestration、state、persistence、side
+  effect、Node/Edge mapping、coverage gap、migration risk 和 G1 scope 已盘点。
+* `_evaluate_batch` 与 `_on_message` 的 downstream blast radius 分别为 CRITICAL
+  和 CRITICAL；这是 ConsoleRuntime 内部共享耦合导致的结构风险。本次只修改文档，
+  未改变业务执行流，无未解释运行时风险。
 
 ### Phase G1 — AgentRuntime + Executable Graph Skeleton
 

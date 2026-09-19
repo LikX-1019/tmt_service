@@ -94,8 +94,10 @@ Unified Chat 与 PDD 最终共享同一个 AgentRuntime 和 AgentGraph。Node �
 
 ### Runtime Boundary
 
-- `ChatService` 仍负责稳定的 `RuleRegistry → ProductResolver/ProductRepository → QAService` 业务顺序。
-- `ChatStateRuntime` 是旁路运行记录和恢复契约，不参与业务决策，也不替代 MySQL/PostgreSQL。
+- `ChatService` 仍负责稳定的 `MySQL binding hydrate → QA exact → RuleRegistry →
+  SocialRouter → ProductResolver/ProductRepository → fallback QA context` 业务顺序。
+- `ChatStateRuntime` 是旁路运行记录和恢复契约，不参与业务决策，也不替代 MySQL 或
+  PostgreSQL-backed product API。
 - 每个 HTTP 请求创建新 `run_id` / `turn_id`；相同 `conversation_id` 复用 `session_id`，但不复用上一轮商品事实快照。
 - 下一轮商品追问仍通过 MySQL binding 得到 `product_id`，并重新读取 PostgreSQL 商品资料。
 - `app/agent/graph.py` 仍是 TODO；Agent Graph / LangGraph 尚未接管 ChatService。
