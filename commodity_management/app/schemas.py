@@ -141,6 +141,17 @@ class VariantRead(VariantCreate):
     updated_at: datetime
 
 
+class CustomerServiceVariant(BaseModel):
+    """消费者客服可用的 SKU 摘要；不暴露库存数量。"""
+
+    sku_id: str
+    name: str
+    attributes: dict[str, str] = Field(default_factory=dict)
+    currency: str
+    price: Decimal | None = None
+    stock_status: StockStatus
+
+
 class DashboardStats(BaseModel):
     total: int
     published: int

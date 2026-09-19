@@ -14,7 +14,7 @@ def test_marks_implicit_product_reference(message: str) -> None:
     assert decision.metadata == {"current_product_available": True}
 
 
-@pytest.mark.parametrize("message", ["怎么用", "这个多少钱", "退款政策是什么"])
+@pytest.mark.parametrize("message", ["怎么用", "退款政策是什么"])
 def test_does_not_mark_without_reference_and_product_question(message: str) -> None:
     decision = ProductContextRule().evaluate(message, RuleContext())
 
@@ -72,3 +72,21 @@ def test_historical_product_reference_requires_product() -> None:
 
     assert decision.matched is True
     assert decision.requires_product is True
+
+
+def test_price_question_without_bound_product_requires_missing_product() -> None:
+    decision = ProductContextRule().evaluate("这个多少钱", RuleContext())
+
+    assert decision.matched is True
+    assert decision.requires_product is True
+    assert decision.metadata == {"current_product_available": False}
+
+
+def test_product_intro_and_price_questions_use_current_product() -> None:
+    for message in ("介绍一下这个产品", "目前多少钱", "还有货吗"):
+        decision = ProductContextRule().evaluate(
+            message, RuleContext(current_product_id="TEST-WRIST-001")
+        )
+
+        assert decision.matched is True
+        assert decision.requires_product is True

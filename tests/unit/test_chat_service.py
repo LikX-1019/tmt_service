@@ -488,6 +488,9 @@ async def test_product_attribute_followups_keep_bound_product() -> None:
         "有什么注意事项",
         "他有l",
         "他有L码的吗",
+        "介绍一下这个产品",
+        "目前多少钱",
+        "s",
     ]
 
     for message in followups:
@@ -499,6 +502,39 @@ async def test_product_attribute_followups_keep_bound_product() -> None:
 
     assert first.route == "product"
     assert answers.calls == ["TEST-WRIST-001"] * (len(followups) + 1)
+    assert qa.calls == 0
+
+
+async def test_size_without_bound_product_asks_for_product_context() -> None:
+    service, products, answers, qa, _ = make_service(
+        products=_wrist_and_bottle_products()
+    )
+
+    response = await service.chat(ChatRequest(conversation_id="c1", message="s"))
+
+    assert response.route == "product_missing"
+    assert response.product is None
+    assert products.calls == []
+    assert answers.calls == []
+    assert qa.calls == 0
+
+
+async def test_invalid_size_is_not_treated_as_product_id() -> None:
+    conversations = FakeConversations()
+    conversations.values["c1"] = ("TEST-WRIST-001", "测试商品-运动护腕")
+    service, products, answers, qa, conversations = make_service(
+        products=_wrist_and_bottle_products(),
+        conversations=conversations,
+    )
+
+    for message in ("s", "S 我可以使用吗"):
+        response = await service.chat(ChatRequest(conversation_id="c1", message=message))
+        assert response.route == "product"
+        assert response.product is not None
+        assert response.product.id == "TEST-WRIST-001"
+
+    assert products.calls == ["TEST-WRIST-001", "TEST-WRIST-001"]
+    assert answers.calls == ["TEST-WRIST-001", "TEST-WRIST-001"]
     assert qa.calls == 0
 
 

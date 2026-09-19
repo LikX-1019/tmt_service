@@ -3,8 +3,9 @@ import pytest
 
 from app.core.exceptions import LLMInvocationError
 
-from app.api.dependencies import get_qa_service
+from app.api.dependencies import get_chat_service, get_qa_service
 from app.qa.models import QAResult, RetrievalDocument
+from app.schemas.chat import ChatProductView, ChatResponse
 from main import app
 
 
@@ -57,6 +58,9 @@ async def test_qa_api_returns_uniform_response() -> None:
             "confidence": 1.0,
             "match_score": None,
             "auto_reply_confidence": None,
+            "product": None,
+            "products": [],
+            "product_resolution": None,
         },
     }
 
@@ -161,3 +165,46 @@ async def test_qa_demo_api_returns_recalled_pairs_and_scores() -> None:
             "rerank_score": 0.94,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_qa_api_with_conversation_uses_unified_chat_context() -> None:
+    class StubChatService:
+        async def chat(self, request):
+            assert request.conversation_id == "sess-1"
+            assert request.message == "TEST-WRIST-001 介绍一下"
+            return ChatResponse(
+                conversation_id=request.conversation_id,
+                answer="护腕介绍",
+                source="product",
+                route="product",
+                product=ChatProductView(
+                    id="TEST-WRIST-001", name="测试商品-运动护腕"
+                ),
+                product_resolution="message_id",
+                confidence=0.99,
+            )
+
+    app.dependency_overrides[get_qa_service] = lambda: StubQAService()
+    app.dependency_overrides[get_chat_service] = lambda: StubChatService()
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/v1/qa",
+                json={
+                    "query": "TEST-WRIST-001 介绍一下",
+                    "conversation_id": "sess-1",
+                },
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["answer"] == "护腕介绍"
+    assert data["route"] == "product"
+    assert data["product"]["id"] == "TEST-WRIST-001"
+    assert data["product_resolution"] == "message_id"
+    assert data["sources"] == []

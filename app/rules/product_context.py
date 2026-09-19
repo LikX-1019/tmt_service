@@ -29,6 +29,7 @@ _PRODUCT_ATTRIBUTE_PATTERN = re.compile(
     r"|型号|尺码|(?:有|有吗|有没有)[\s]*[smlxyz]",
     re.IGNORECASE,
 )
+_SIZE_TOKEN_PATTERN = re.compile(r"^(?:[sml]|xl|xxl|[23]xl)$", re.IGNORECASE)
 _PRODUCT_QUESTION_HINTS = (
     "不合适",
     "有什么区别",
@@ -55,6 +56,13 @@ _PRODUCT_QUESTION_HINTS = (
     "规格",
     "颜色",
     "防水",
+    "介绍",
+    "详情",
+    "价格",
+    "多少钱",
+    "购买",
+    "有货",
+    "库存",
     "特点",
     "卖点",
     "注意事项",
@@ -70,14 +78,18 @@ class ProductContextRule(BaseRule):
 
     def evaluate(self, message: str, context: RuleContext) -> RuleDecision:
         has_reference = any(reference in message for reference in _PRODUCT_REFERENCES)
+        is_size_token = bool(_SIZE_TOKEN_PATTERN.fullmatch(message))
         has_product_question = any(
             hint in message for hint in _PRODUCT_QUESTION_HINTS
         ) or bool(
             _PRODUCT_ATTRIBUTE_PATTERN.search(message)
             or _PRODUCT_SWITCH_PATTERN.search(message)
+            or is_size_token
         )
         has_bound_product = context.current_product_id is not None
-        if not has_product_question or not (has_reference or has_bound_product):
+        if not has_product_question or not (
+            is_size_token or has_reference or has_bound_product
+        ):
             return self.no_match()
 
         available = has_bound_product

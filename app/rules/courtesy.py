@@ -8,7 +8,19 @@ from app.rules.base import BaseRule, RuleContext, RuleDecision
 
 
 _FAREWELL_PHRASES = frozenset(
-    {"再见", "拜拜", "没事了", "没有问题了", "先这样", "谢谢再见", "好的再见", "那先这样"}
+    {
+        "再见",
+        "拜拜",
+        "下次见",
+        "回头见",
+        "改天见",
+        "没事了",
+        "没有问题了",
+        "先这样",
+        "谢谢再见",
+        "好的再见",
+        "那先这样",
+    }
 )
 _THANKS_PHRASES = frozenset(
     {
@@ -80,7 +92,7 @@ class CourtesyRule(BaseRule):
             matched=True,
             rule_name=self.name,
             terminal=True,
-            route="fallback",
+            route="small_talk",
             reason_code=reason_code,
             fixed_reply=fixed_reply,
         )

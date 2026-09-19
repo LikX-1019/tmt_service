@@ -24,6 +24,7 @@ from app.schemas.chat import (
     ChatSourceView,
 )
 from app.services.product_resolver import ConversationProductReference, ProductResolver
+from app.services.social_router import SocialDecision, SocialRouter
 from app.services.product_service import (
     ProductAnswer,
     ProductAnswerService,
@@ -50,6 +51,50 @@ def _content_to_text(content: Any) -> str:
     return str(content).strip() if content is not None else ""
 
 
+def _social_response(
+    request: ChatRequest,
+    decision: SocialDecision,
+    binding: ChatConversationProduct | None,
+) -> ChatResponse:
+    assert decision.intent in {"small_talk", "empathy"}
+    assert decision.response is not None
+    return ChatResponse(
+        conversation_id=request.conversation_id,
+        answer=decision.response,
+        source="rule",
+        route=decision.intent,
+        product_resolution=(
+            "conversation" if binding is not None and binding.product_id else "none"
+        ),
+        rule_name="SocialRouter",
+        reason_code=decision.reason_code,
+        confidence=decision.confidence,
+    )
+
+
+def _log_chat_response(message: str, response: ChatResponse) -> None:
+    logger.info(
+        "chat_response_completed",
+        extra={
+            "event": "chat_response_completed",
+            "message_length": len(message),
+            "route": response.route,
+            "intent": response.route,
+            "social_intent": (
+                response.route
+                if response.route in {"small_talk", "empathy"}
+                else None
+            ),
+            "product_resolution": response.product_resolution,
+            "resolved_product": response.product.id if response.product else None,
+            "answer_source": response.source,
+            "fallback_reason": (
+                response.route if response.route == "fallback" else None
+            ),
+        },
+    )
+
+
 class ChatService:
     """封装 Terminal Rule → Product → QA 的后端主路由。"""
 
@@ -63,6 +108,7 @@ class ChatService:
         qa_provider: Callable[[], Awaitable[QAService]] | None = None,
         product_resolver: ProductResolver | None = None,
         state_runtime: ChatStateRuntime | None = None,
+        social_router: SocialRouter | None = None,
     ) -> None:
         self._rules = rule_registry or default_rule_registry()
         self._conversations = conversation_repository
@@ -71,6 +117,7 @@ class ChatService:
         self._qa_provider = qa_provider
         self._product_resolver = product_resolver or ProductResolver()
         self._state_runtime = state_runtime or ChatStateRuntime()
+        self._social_router = social_router or SocialRouter()
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         state = self._state_runtime.create_state(
@@ -83,6 +130,7 @@ class ChatService:
             await self._state_runtime.start(state)
             response = await self._route_chat(request, state)
             await self._state_runtime.complete(state, response)
+            _log_chat_response(request.message, response)
             return response
         except Exception as exc:
             try:
@@ -136,6 +184,14 @@ class ChatService:
                 confidence=terminal.confidence,
             )
 
+        social_decision = (
+            await self._social_router.classify(request.message)
+            if not rule_result.requires_product and not request.product_id
+            else SocialDecision()
+        )
+        if social_decision.intent != "other" and social_decision.response:
+            return _social_response(request, social_decision, binding)
+
         recent_products = self._recent_products(binding)
         resolution = self._product_resolver.resolve(
             request_product_id=request.product_id,
@@ -145,7 +201,12 @@ class ChatService:
         )
         explicit_product = resolution.source in {"request", "url", "message_id", "history"}
         name_query = None
-        if not explicit_product:
+        keep_bound_product = (
+            resolution.source == "conversation"
+            and binding is not None
+            and rule_result.requires_product
+        )
+        if not explicit_product and not keep_bound_product:
             name_query = self._product_resolver.extract_name_query(
                 request.message,
                 product_intent=rule_result.requires_product,

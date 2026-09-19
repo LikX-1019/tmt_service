@@ -34,6 +34,7 @@ from app.repositories.console_repository import ConsoleRepository
 from app.services.auto_reply_policy import AutoReplyPolicy, Calibration
 from app.services.event_broker import EventBroker
 from app.services.message_asset_storage import MessageAssetStorage
+from app.services.social_router import SocialRouter
 from app.services.product_service import (
     HttpProductClient,
     ProductAnswerService,
@@ -74,6 +75,7 @@ class ConsoleRuntime:
         router: CustomerServiceRouter | None = None,
         product_provider: ProductProvider | None = None,
         product_answer_service: ProductAnswerService | None = None,
+        social_router: SocialRouter | None = None,
         *,
         shop_id: str | None = None,
         broker: EventBroker | None = None,
@@ -88,6 +90,7 @@ class ConsoleRuntime:
         self._router = router or CustomerServiceRouter()
         self._product_provider = product_provider or HttpProductClient(self._settings)
         self._product_answer_service = product_answer_service or ProductAnswerService()
+        self._social_router = social_router or SocialRouter()
         self._broker = broker or EventBroker()
         self._legacy_single_shop_mode = shop_id is None
         self._shop_id = shop_id
@@ -494,6 +497,25 @@ class ConsoleRuntime:
                         else f"{source_label}识别为一般问候；{'；'.join(blockers)}，仅生成建议"
                     ),
                     "suggested_answer": agent_reply.answer,
+                    "policy_version": self._settings.auto_reply_policy_version,
+                }
+
+        if decision_payload is None:
+            social_decision = await self._social_router.classify(query)
+            if social_decision.intent != "other" and social_decision.response:
+                decision_payload = {
+                    "batch_key": batch_key,
+                    "route": social_decision.intent,
+                    "action": "auto_send" if allow_auto else "suggest",
+                    "recognition_source": social_decision.source,
+                    "top_score": social_decision.confidence,
+                    "risk_reason": (
+                        f"识别为{'社交' if social_decision.intent == 'small_talk' else '情绪'}表达，"
+                        "已进入自动发送队列"
+                        if allow_auto
+                        else "识别为社交或情绪表达；未满足自动发送条件，仅生成建议"
+                    ),
+                    "suggested_answer": social_decision.response,
                     "policy_version": self._settings.auto_reply_policy_version,
                 }
 

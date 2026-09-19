@@ -1,20 +1,39 @@
-"""独立 QA API。"""
+"""独立 QA API，兼容无会话检索与带商品上下文的 QA 客户端。"""
 
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from app.api.dependencies import get_qa_service
+from app.api.dependencies import get_chat_service, get_qa_service
 from app.qa.models import QAResult, RetrievalDocument
 from app.qa.service import QAService
+from app.schemas.chat import ChatRequest, ChatResponse
 from app.schemas.common import ApiResponse
-from app.schemas.qa import QADemoResponse, QADemoSource, QARequest, QAResponse, QASource
+from app.schemas.qa import (
+    QADemoResponse,
+    QADemoSource,
+    QARequest,
+    QAResponse,
+    QASource,
+)
 
 
 router = APIRouter(tags=["qa"])
 
 
-async def _answer(service: QAService, request: QARequest) -> QAResult:
+async def _answer(
+    service: QAService,
+    request: QARequest,
+    chat_service: Annotated[object, Depends(get_chat_service)],
+) -> QAResult | ChatResponse:
+    if request.conversation_id:
+        return await chat_service.chat(
+            ChatRequest(
+                conversation_id=request.conversation_id,
+                message=request.query,
+                service_stage=request.service_stage,
+            )
+        )
     context = {
         key: value
         for key, value in {
@@ -28,7 +47,30 @@ async def _answer(service: QAService, request: QARequest) -> QAResult:
     return await service.answer(request.query, **context)
 
 
-def _build_qa_response(result: QAResult) -> QAResponse:
+def _build_qa_response(result: QAResult | ChatResponse) -> QAResponse:
+    if isinstance(result, ChatResponse):
+        return QAResponse(
+            answer=result.answer,
+            route=result.route if result.route in {
+                "faq",
+                "rag",
+                "fallback",
+                "product",
+                "product_selection",
+                "product_not_found",
+                "product_missing",
+                "product_link_invalid",
+                "product_link_unsupported",
+                "greeting",
+                "human",
+                "small_talk",
+                "empathy",
+            } else "fallback",
+            confidence=result.confidence,
+            product=result.product,
+            products=result.products,
+            product_resolution=result.product_resolution,
+        )
     return QAResponse(
         answer=result.answer,
         route=result.route,
@@ -61,8 +103,9 @@ def _display_answer(document: RetrievalDocument) -> str:
 async def answer_question(
     request: QARequest,
     service: Annotated[QAService, Depends(get_qa_service)],
+    chat_service: Annotated[object, Depends(get_chat_service)],
 ) -> ApiResponse[QAResponse]:
-    result = await _answer(service, request)
+    result = await _answer(service, request, chat_service)
     return ApiResponse(data=_build_qa_response(result))
 
 
@@ -70,10 +113,19 @@ async def answer_question(
 async def answer_question_with_trace(
     request: QARequest,
     service: Annotated[QAService, Depends(get_qa_service)],
+    chat_service: Annotated[object, Depends(get_chat_service)],
 ) -> ApiResponse[QADemoResponse]:
-    """返回答案与最终进入 TopK 的真实 QA 对，仅供本地演示与调试。"""
-    result = await _answer(service, request)
+    """返回答案与真实召回 QA 对；带会话时走统一 Chat 且没有检索 trace。"""
+    result = await _answer(service, request, chat_service)
     public = _build_qa_response(result)
+    if isinstance(result, ChatResponse):
+        return ApiResponse(
+            data=QADemoResponse(
+                **public.model_dump(),
+                retrieval_counts={},
+                recalled_pairs=[],
+            )
+        )
     recalled_pairs = [
         QADemoSource(
             rank=rank,

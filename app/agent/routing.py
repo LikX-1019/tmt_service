@@ -10,6 +10,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.factories.llm_factory import LLMFactory
+from app.rules.base import RuleContext
+from app.rules.product_context import ProductContextRule
 
 
 HANDOFF_PATTERN = re.compile(
@@ -37,7 +39,21 @@ class CustomerServiceRouter:
     def requires_handoff(query: str) -> bool:
         return bool(HANDOFF_PATTERN.search(query))
 
-    async def classify(self, query: str, *, has_product_context: bool) -> RouteClassification:
+    async def classify(
+        self,
+        query: str,
+        *,
+        has_product_context: bool = False,
+        current_product_id: str | None = None,
+    ) -> RouteClassification:
+        context_product_id = current_product_id or (
+            "bound-product" if has_product_context else None
+        )
+        shared_decision = ProductContextRule().evaluate(
+            query, RuleContext(current_product_id=context_product_id)
+        )
+        if shared_decision.requires_product:
+            return RouteClassification(route="product", confidence=1.0)
         if PRODUCT_HINT_PATTERN.search(query):
             return RouteClassification(route="product", confidence=1.0)
         try:

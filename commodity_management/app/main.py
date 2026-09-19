@@ -22,6 +22,7 @@ from app.schemas import (
     LoginRequest,
     ProductCreate,
     ProductListResponse,
+    CustomerServiceVariant,
     ProductRead,
     ProductUpdate,
     VariantCreate,
@@ -273,6 +274,23 @@ def customer_service_product_search(
     return {"data": database.search_published_profiles(query, limit)}
 
 
+def customer_service_product_payload(profile: dict) -> dict[str, dict]:
+    """把商品和 active SKU 汇总为客服只读视图。"""
+    variants = [
+        CustomerServiceVariant(
+            sku_id=str(item["sku_id"]),
+            name=str(item["name"]),
+            attributes={str(key): str(value) for key, value in (item.get("attributes") or {}).items()},
+            currency=str(item["currency"]),
+            price=item.get("price"),
+            stock_status=item["stock_status"],
+        ).model_dump()
+        for item in database.list_variants(str(profile["id"]))
+        if item.get("status") == "active"
+    ]
+    return {"data": {**profile, "variants": variants}}
+
+
 @app.get("/products/{product_id}")
 def customer_service_product(
     product_id: str,
@@ -284,4 +302,4 @@ def customer_service_product(
     profile = database.get_published_profile(product_id)
     if profile is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="商品不存在或尚未发布")
-    return {"data": profile}
+    return customer_service_product_payload(profile)

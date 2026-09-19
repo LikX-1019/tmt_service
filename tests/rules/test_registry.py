@@ -29,6 +29,7 @@ def test_default_rules_are_sorted_and_serializable() -> None:
         "AfterSaleRiskRule",
         "ProductContextRule",
         "GreetingRule",
+        "SocialRule",
         "CourtesyRule",
     ]
     result = registry.evaluate("这个怎么戴", RuleContext())
@@ -44,7 +45,7 @@ def test_default_rules_are_sorted_and_serializable() -> None:
         ("您好，我要人工", "HumanHandoffRule", "human"),
         ("这个不合适我要退款", "AfterSaleRiskRule", "human"),
         ("你好", "GreetingRule", "greeting"),
-        ("谢谢", "CourtesyRule", "fallback"),
+        ("谢谢", "CourtesyRule", "small_talk"),
     ],
 )
 def test_terminal_priority_resolves_conflicts(

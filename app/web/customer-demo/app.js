@@ -180,6 +180,7 @@ class QACompatibilityTransport extends ChatTransport {
   async send(message) {
     const payload = {
       query: message.content,
+      conversation_id: message.session_id,
     };
     if (message.service_stage) payload.service_stage = message.service_stage;
 
@@ -201,9 +202,11 @@ class QACompatibilityTransport extends ChatTransport {
       answer: data.answer,
       source: "qa",
       route: typeof data.route === "string" ? data.route : null,
-      product: null,
-      products: [],
-      productResolution: message.product_id ? "request" : "none",
+      product: data.product && typeof data.product.id === "string" ? data.product : null,
+      products: normalizeProducts(data.products),
+      productResolution: typeof data.product_resolution === "string"
+        ? data.product_resolution
+        : message.product_id ? "request" : "none",
       ruleName: null,
       qaHit: typeof data.qa_hit === "boolean" ? data.qa_hit : data.route !== "fallback",
       confidence: normalizeNumber(data.confidence),

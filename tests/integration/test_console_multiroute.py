@@ -313,3 +313,54 @@ async def test_product_question_without_goods_card_transfers_without_message() -
     finally:
         await runtime.close()
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_social_expression_precedes_faq_and_rag() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    repository = ConsoleRepository(async_sessionmaker(engine, expire_on_commit=False))
+    connector = ReadyConnector()
+    qa = StubQA()
+
+    async def qa_provider():
+        return qa
+
+    runtime = ConsoleRuntime(
+        repository,
+        connector,
+        qa_provider,
+        Settings(_env_file=None),
+        agent=OtherAgent(),
+        router=CustomerServiceRouter(),
+    )
+    try:
+        await runtime.ensure_initialized()
+        shop = await repository.ensure_shop("测试店铺")
+        await repository.set_global_automation(shop["id"], True)
+        conversation, _, _ = await repository.ingest_message(
+            shop["id"],
+            {
+                "platform_conversation_id": "buyer-1",
+                "display_name": "顾客",
+                "direction": "inbound",
+                "kind": "text",
+                "content": "下次见",
+                "occurred_at": datetime.now(timezone.utc),
+                "fingerprint": "s" * 64,
+            },
+        )
+
+        await runtime._evaluate_batch(conversation["id"], [message("下次见", "s" * 64)])
+        await runtime._send_queue.join()
+        decision = await repository.latest_decision(conversation["id"])
+        assert decision is not None
+        assert decision["route"] == "small_talk"
+        assert decision["action"] == "auto_send"
+        assert decision["suggested_answer"] == "好的，下次再见，祝您生活愉快～"
+        assert connector.sent == ["好的，下次再见，祝您生活愉快～"]
+        assert qa.rag_called is False
+    finally:
+        await runtime.close()
+        await engine.dispose()

@@ -359,7 +359,16 @@ def _response_state_route(response: ChatResponse) -> ChatRoute:
         return "product_selection"
     if response.source == "product":
         return "product"
-    if response.route in {"faq", "rag", "human", "greeting", "fallback", "tool"}:
+    if response.route in {
+        "faq",
+        "rag",
+        "human",
+        "greeting",
+        "small_talk",
+        "empathy",
+        "fallback",
+        "tool",
+    }:
         return response.route
     return "fallback"
 

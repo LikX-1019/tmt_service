@@ -62,6 +62,8 @@ ChatRoute = Literal[
     "tool",
     "human",
     "greeting",
+    "small_talk",
+    "empathy",
     "fallback",
     "product",
     "product_selection",

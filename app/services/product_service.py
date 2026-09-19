@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from decimal import Decimal
 from typing import Any, Literal, Protocol
 
 import httpx
@@ -21,6 +22,21 @@ class ProductNotFoundError(ProductLookupError):
     """商品不存在、未发布或已被下架。"""
 
 
+class ProductVariantFact(BaseModel):
+    """客服只读 SKU 摘要；不向顾客暴露具体库存数量。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    sku_id: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=500)
+    attributes: dict[str, str] = Field(default_factory=dict)
+    currency: str = Field(default="CNY", min_length=3, max_length=3)
+    price: Decimal | None = Field(default=None, ge=0)
+    stock_status: Literal["unknown", "in_stock", "low_stock", "out_of_stock"] = (
+        "unknown"
+    )
+
+
 class ProductProfile(BaseModel):
     """商品 PostgreSQL 视口暴露的真实字段。"""
 
@@ -36,6 +52,7 @@ class ProductProfile(BaseModel):
     model: str | None = Field(default=None, max_length=200)
     selling_points: list[str] = Field(default_factory=list, max_length=30)
     specifications: dict[str, str] = Field(default_factory=dict)
+    variants: list[ProductVariantFact] = Field(default_factory=list, max_length=50)
     usage: str | None = Field(default=None, max_length=4000)
     suitable_for: str | None = Field(default=None, max_length=2000)
     warnings: str | None = Field(default=None, max_length=2000)
@@ -208,6 +225,19 @@ class ProductContextBuilder:
             sections.append(
                 ("规格", "\n".join(f"- {key}：{value}" for key, value in product.specifications.items()))
             )
+        if product.variants:
+            sections.append(
+                (
+                    "可选SKU",
+                    "\n".join(
+                        f"- {variant.name}（{variant.sku_id}）："
+                        f"{'、'.join(f'{key}={value}' for key, value in variant.attributes.items()) or '规格未提供'}；"
+                        f"价格={'未提供' if variant.price is None else f'{variant.currency} {variant.price:.2f}'}；"
+                        f"库存状态={variant.stock_status}"
+                        for variant in product.variants
+                    ),
+                )
+            )
         optional_sections = (
             ("使用方法", product.usage),
             ("适合场景", product.suitable_for),
@@ -252,12 +282,16 @@ class ProductAnswerService:
                         "3. 支持短句和口语，如“他有l”“几个码”“有大码吗”。先结合当前商品资料推断意图。\n"
                         "4. 已知资料能回答时必须直接回答，可列出尺码数量、包含关系或最大尺码；"
                         "不要因为问法与字段名不一致而要求补充信息。\n"
-                        "5. 只有检查全部 Product Context 后仍无相关事实，才说明当前商品资料未提供；"
+                        "5. 价格只能来自可选 SKU 的结构化价格；多 SKU 可列价格或区间，"
+                        "无价格时明确说明当前商品资料未提供价格。\n"
+                        "6. 只有 stock_status=in_stock 才能说可购买；不得虚构库存数量，"
+                        "unknown 或 out_of_stock 时不能承诺有货。\n"
+                        "7. 只有检查全部 Product Context 后仍无相关事实，才说明当前商品资料未提供；"
                         "不得虚构材质、规格、尺寸、功能、效果、库存或适用结论。\n"
-                        "6. 不复述完整商品介绍，不展示内部字段名、JSON 或检索过程。\n"
-                        "7. 售后、退款、换货、赔付、订单、物流问题必须标记 "
+                        "8. 不复述完整商品介绍，不展示内部字段名、JSON 或检索过程。\n"
+                        "9. 售后、退款、换货、赔付、订单、物流问题必须标记 "
                         "contains_sensitive_or_after_sales=true。\n"
-                        "8. 商品事实不明确或资料不足时标记 needs_clarification=true、"
+                        "10. 商品事实不明确或资料不足时标记 needs_clarification=true、"
                         "facts_supported=false，并用中文说明缺口。"
                     )
                 ),

@@ -47,6 +47,7 @@ _SEARCH_PREFIXES = (
     "请问",
     "咨询",
 )
+_SIZE_TOKEN_PATTERN = re.compile(r"^(?:[sml]|xl|xxl|[23]xl)$", re.IGNORECASE)
 _SIZE_ATTRIBUTE_PATTERN = re.compile(
     r"(?:几个|有哪些|什么|最大|最小).{0,4}(?:型号|尺码|码)"
     r"|型号|尺码|(?:有|有吗|有没有)[\s]*[smlxyz]",
@@ -57,7 +58,7 @@ _HISTORICAL_REFERENCE_PATTERN = re.compile(
 )
 _QUESTION_TAIL_PATTERN = re.compile(r"(?:我)?(?:能|可以|想要|想|要)$")
 _ATTRIBUTE_ONLY_QUERY_PATTERN = re.compile(
-    r"(?:有|没有|几|个|哪些|什么|最大|最小|怎么|为什么|型号|尺码|码|[smlxyz])+",
+    r"(?:有|没有|哪|几|个|哪些|什么|最大|最小|怎么|为什么|型号|尺码|码|[smlxyz])+",
     re.IGNORECASE,
 )
 _QUESTION_MARKERS = (
@@ -211,6 +212,8 @@ class ProductResolver:
                 or any(separator in candidate for separator in "._:-")
                 or any("A" <= character <= "Z" for character in candidate)
             )
+            if _SIZE_TOKEN_PATTERN.fullmatch(candidate):
+                return None
             contextual_remainder = any(
                 marker in remainder for marker in _BARE_ID_CONTEXT_MARKERS
             ) or bool(_SIZE_ATTRIBUTE_PATTERN.search(remainder))

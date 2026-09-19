@@ -1,3 +1,4 @@
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -13,6 +14,7 @@ from app.services.product_service import (
     ProductNotFoundError,
     ProductProfile,
     ProductSearchResult,
+    ProductVariantFact,
 )
 
 
@@ -198,3 +200,88 @@ async def test_product_prompt_includes_structured_size_and_model_facts() -> None
     assert "规格：" + "\n" + "- 尺码：S、M、L" in user_prompt
     assert "当前会话已绑定商品 TEST-WRIST-001" in user_prompt
     assert "Current User Message：" + "\n" + "他有几个型号" in user_prompt
+
+
+@pytest.mark.asyncio
+async def test_product_client_maps_customer_service_variants() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "id": "TEST-WRIST-001",
+                    "name": "测试商品-运动护腕",
+                    "summary": "支撑。",
+                    "variants": [
+                        {
+                            "sku_id": "WRIST-S",
+                            "name": "S 码",
+                            "attributes": {"尺码": "S"},
+                            "currency": "CNY",
+                            "price": "69.90",
+                            "stock_status": "in_stock",
+                            "stock_quantity": 18,
+                        },
+                        {
+                            "sku_id": "WRIST-L",
+                            "name": "L 码",
+                            "attributes": {"尺码": "L"},
+                            "currency": "CNY",
+                            "price": None,
+                            "stock_status": "out_of_stock",
+                        },
+                    ],
+                }
+            },
+        )
+
+    settings = Settings(
+        _env_file=None,
+        product_api_base_url="https://products.example.test",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        product = await HttpProductClient(settings, client).get_product("TEST-WRIST-001")
+
+    assert product.variants == [
+        ProductVariantFact(
+            sku_id="WRIST-S",
+            name="S 码",
+            attributes={"尺码": "S"},
+            currency="CNY",
+            price=Decimal("69.90"),
+            stock_status="in_stock",
+        ),
+        ProductVariantFact(
+            sku_id="WRIST-L",
+            name="L 码",
+            attributes={"尺码": "L"},
+            currency="CNY",
+            price=None,
+            stock_status="out_of_stock",
+        ),
+    ]
+
+
+def test_product_context_includes_variant_price_without_stock_quantity() -> None:
+    product = ProductProfile(
+        id="TEST-WRIST-001",
+        name="测试商品-运动护腕",
+        summary="支撑。",
+        variants=[
+            ProductVariantFact(
+                sku_id="WRIST-S",
+                name="S 码",
+                attributes={"尺码": "S"},
+                currency="CNY",
+                price=Decimal("69.90"),
+                stock_status="in_stock",
+            )
+        ],
+    )
+
+    context = ProductContextBuilder.build(product)
+
+    assert "可选SKU：" in context
+    assert "S 码（WRIST-S）：尺码=S；价格=CNY 69.90；库存状态=in_stock" in context
+    assert "stock_quantity" not in context
+    assert "18" not in context

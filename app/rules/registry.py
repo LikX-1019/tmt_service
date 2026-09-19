@@ -15,6 +15,7 @@ from app.rules.complaint import ComplaintRule
 from app.rules.courtesy import CourtesyRule
 from app.rules.greeting import GreetingRule
 from app.rules.human_handoff import HumanHandoffRule
+from app.rules.social import SocialRule
 from app.rules.product_context import ProductContextRule
 
 
@@ -110,6 +111,7 @@ def default_rule_registry() -> RuleRegistry:
             HumanHandoffRule(),
             ComplaintRule(),
             AfterSaleRiskRule(),
+            SocialRule(),
             ProductContextRule(),
             GreetingRule(),
             CourtesyRule(),
