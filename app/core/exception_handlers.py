@@ -8,7 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.core.exceptions import AppException
+from app.core.exceptions import AppException, LLMInvocationError
 from app.schemas.common import ApiResponse
 
 
@@ -39,7 +39,14 @@ async def app_exception_handler(
             "status_code": exc.status_code,
         },
     )
-    return _error_response(exc.code, exc.message, exc.status_code)
+    # LLM wrappers may carry provider diagnostics; expose only the stable public
+    # message and keep custom details server-side.
+    public_message = (
+        type(exc).default_message
+        if isinstance(exc, LLMInvocationError)
+        else exc.message
+    )
+    return _error_response(exc.code, public_message, exc.status_code)
 
 
 async def validation_exception_handler(

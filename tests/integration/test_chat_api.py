@@ -103,6 +103,38 @@ async def test_chat_api_hides_llm_traceback() -> None:
 
 
 @pytest.mark.asyncio
+async def test_chat_api_sanitizes_qa_provider_errors() -> None:
+    class BrokenQAService:
+        async def answer(self, *_args: object, **_kwargs: object) -> None:
+            raise LLMInvocationError("DeepSeek private API key rejected")
+
+    async def qa_provider() -> BrokenQAService:
+        return BrokenQAService()
+
+    service = ChatService(qa_provider=qa_provider)
+    app.dependency_overrides[get_chat_service] = lambda: service
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/v1/chat",
+                json={"message": "你们什么时候发货"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "code": "LLM_INVOCATION_ERROR",
+        "message": "大模型调用失败，请稍后重试",
+        "data": None,
+    }
+    assert "DeepSeek" not in response.text
+    assert "private API key" not in response.text
+
+
+@pytest.mark.asyncio
 async def test_chat_api_accepts_conversation_and_product_context() -> None:
     class ProductStubService:
         async def chat(self, request: ChatRequest) -> ChatResponse:

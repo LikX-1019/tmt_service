@@ -63,6 +63,7 @@ async def test_rag_path_generates_from_sufficient_evidence() -> None:
     result = await service.answer("这款可以整鞋水洗吗")
 
     assert result.route == "rag"
+    assert result.confidence is None
     assert result.sources[0].chunk_id == "c1"
     retriever.retrieve.assert_awaited_once()
     reranker.rerank.assert_awaited_once()
@@ -80,6 +81,7 @@ async def test_fallback_skips_answer_generator() -> None:
     result = await service.answer("你们公司的老板是谁")
 
     assert result.route == "fallback"
+    assert result.confidence is None
     assert result.answer == FALLBACK_ANSWER
     assert result.answer == "目前知识库中暂无相关信息，请联系人工客服获取帮助。"
     assert result.sources == []

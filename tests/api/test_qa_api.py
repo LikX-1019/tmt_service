@@ -1,6 +1,8 @@
 import httpx
 import pytest
 
+from app.core.exceptions import LLMInvocationError
+
 from app.api.dependencies import get_qa_service
 from app.qa.models import QAResult, RetrievalDocument
 from main import app
@@ -71,6 +73,59 @@ async def test_qa_api_rejects_blank_query() -> None:
         app.dependency_overrides.clear()
 
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_qa_api_sanitizes_provider_errors() -> None:
+    class MilvusUnavailableQAService:
+        async def answer(self, query: str) -> QAResult:
+            raise RuntimeError(
+                "pymilvus private endpoint 10.0.0.9:19530 connection refused"
+            )
+
+    app.dependency_overrides[get_qa_service] = lambda: MilvusUnavailableQAService()
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://test",
+        ) as client:
+            response = await client.post("/api/v1/qa", json={"query": "清洗"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "code": "INTERNAL_SERVER_ERROR",
+        "message": "服务器内部错误",
+        "data": None,
+    }
+    assert "pymilvus" not in response.text
+    assert "10.0.0.9" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_qa_api_sanitizes_llm_provider_errors() -> None:
+    class LLMBrokenQAService:
+        async def answer(self, query: str) -> QAResult:
+            raise LLMInvocationError("DeepSeek private API key rejected")
+
+    app.dependency_overrides[get_qa_service] = lambda: LLMBrokenQAService()
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post("/api/v1/qa", json={"query": "清洗"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "code": "LLM_INVOCATION_ERROR",
+        "message": "大模型调用失败，请稍后重试",
+        "data": None,
+    }
+    assert "DeepSeek" not in response.text
+    assert "private API key" not in response.text
 
 
 @pytest.mark.asyncio
