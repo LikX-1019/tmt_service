@@ -121,6 +121,9 @@ class MilvusVectorStore:
                 filter=f"document_id == {document_literal} and document_version == {version_literal}",
                 output_fields=output_fields,
                 limit=expected + 1,
+                # Activation follows an upsert in the same process. Strong read
+                # prevents an eventually-consistent query from missing new chunks.
+                consistency_level="Strong",
             )
             if len(rows) != expected:
                 raise RuntimeError(f"文档 {document_id} 新版本 chunk 校验失败")
