@@ -73,6 +73,15 @@ class SemanticProductResolver:
             "3. 如果多个候选都高度匹配，ambiguous=true，不要随意选择。\n"
             "4. 如果没有明确商品指代或没有候选匹配，product_id=null 且 ambiguous=false。\n"
             "5. 只输出 JSON 字段 product_id、confidence、ambiguous。\n\n"
+            "6. 输出仅限一个 JSON 对象：不带 Markdown 代码块、不带解释文字。\n"
+            "7. 无法确定用户指的是哪个候选时，即使只有一个候选也要 ambiguous=true。\n\n"
+            "示例：\n"
+            "- 候选含 product_id=1001（运动水壶），用户说“帮我看看那个水杯” → "
+            '{"product_id":"1001","confidence":0.9,"ambiguous":false}（口语别名匹配）\n'
+            "- 候选含两个商品，用户说“这两个哪个好” → "
+            '{"product_id":null,"confidence":0.3,"ambiguous":true}（指代不明确）\n'
+            "- 用户只说“多少钱”且无商品指代 → "
+            '{"product_id":null,"confidence":0.1,"ambiguous":false}（无商品指代）\n\n'
             f"当前绑定商品ID：{current_product_id or '无'}\n"
             "最近商品候选：\n"
             f"{self._format_candidates(candidates, current_product_id)}\n\n"

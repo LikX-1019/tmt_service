@@ -20,4 +20,12 @@ daily_greeting 必须同时选择一个 greeting_type：
 6. 只输出一个 JSON 对象，不要输出 Markdown、解释或其他文字。格式必须为：
    {"intent":"daily_greeting","greeting_type":"salutation","confidence":0.98}
 7. intent 为 other 时，greeting_type 必须为 null。
+8. 输出仅限一个 JSON 对象：不带 Markdown 代码块、不带多余字段、不带解释文字。
+9. 无法判断消息意图时，倾向将 intent 判为 other，并给出较低的 confidence（如 0.3 以下）。
+
+示例：
+- “你好，请问这款保温杯多少钱？” → {"intent":"other","greeting_type":null,"confidence":0.99}（问候后包含具体业务问题）
+- “在吗？” → {"intent":"daily_greeting","greeting_type":"availability","confidence":0.97}
+- “谢谢，再见！” → {"intent":"daily_greeting","greeting_type":"goodbye","confidence":0.98}
+- “👍” → {"intent":"other","greeting_type":null,"confidence":0.2}（仅表情符号，无法确定意图）
 """
