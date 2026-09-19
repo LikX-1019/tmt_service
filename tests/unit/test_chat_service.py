@@ -2,10 +2,12 @@ from typing import Any
 
 import pytest
 
+from app.core.config import Settings
 from app.core.exceptions import ProductServiceUnavailableError
 from app.qa.models import QAResult, QASource
 from app.schemas.chat import ChatRequest
 from app.services.chat_service import ChatService
+from app.services.product_resolver import ProductResolver
 from app.services.product_service import (
     ProductAnswer,
     ProductLookupError,
@@ -131,6 +133,9 @@ def make_service(
         product_repository=products,
         product_answer_service=answers,
         qa_provider=qa_provider,
+        product_resolver=ProductResolver(
+            Settings(_env_file=None, product_api_base_url="http://127.0.0.1:8088")
+        ),
     )
     return service, products, answers, qa, conversations
 
