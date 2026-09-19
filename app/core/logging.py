@@ -443,8 +443,10 @@ def _add_category_handler(
     handler: DailyDatedFileHandler,
 ) -> None:
     logger = logging.getLogger(logger_name)
-    logger.addHandler(handler)
-    _managed_file_handlers.append((logger, handler))
+    logger.propagate = True
+    if handler not in logger.handlers:
+        logger.addHandler(handler)
+        _managed_file_handlers.append((logger, handler))
 
 
 def configure_logging(

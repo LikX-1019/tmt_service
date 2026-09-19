@@ -57,7 +57,11 @@ def isolated_logging(tmp_path: Path):
     saved_root_level = root.level
     root.handlers.clear()
     saved_children = {
-        name: (list(logging.getLogger(name).handlers), logging.getLogger(name).level)
+        name: (
+            list(logging.getLogger(name).handlers),
+            logging.getLogger(name).level,
+            logging.getLogger(name).propagate,
+        )
         for name in MANAGED_LOGGERS
     }
     for name in MANAGED_LOGGERS:
@@ -70,10 +74,11 @@ def isolated_logging(tmp_path: Path):
     root.setLevel(saved_root_level)
     for handler in saved_root_handlers:
         root.addHandler(handler)
-    for name, (handlers, level) in saved_children.items():
+    for name, (handlers, level, propagate) in saved_children.items():
         child = logging.getLogger(name)
         child.handlers.clear()
         child.setLevel(level)
+        child.propagate = propagate
         for handler in handlers:
             child.addHandler(handler)
     logging_module._log_files = None
@@ -217,6 +222,7 @@ def test_logger_routes_without_duplicate_records_in_one_file(
     isolated_logging: Path,
 ) -> None:
     now = datetime(2026, 9, 19, 11, 15, tzinfo=timezone.utc)
+    logging.getLogger("app.qa").propagate = False
     configure_logging(
         Settings(_env_file=None, log_dir=isolated_logging),
         force=True,
@@ -242,6 +248,13 @@ def test_logger_routes_without_duplicate_records_in_one_file(
         assert len(records_with_event(date_dir / dedicated_file, event)) == 1
         assert len(records_with_event(date_dir / "app.log", event)) == 1
         assert len(records_with_event(date_dir / "error.log", event)) == 0
+
+    qa_handlers = [
+        handler
+        for handler in logging.getLogger("app.qa").handlers
+        if isinstance(handler, logging_module.DailyDatedFileHandler)
+    ]
+    assert len(qa_handlers) == 1
 
 
 def test_sensitive_values_are_redacted(isolated_logging: Path) -> None:
@@ -311,6 +324,38 @@ def test_request_and_trace_context_flow_through_http_logs(
         assert record["trace_id"] == "trace-1"
         assert record["shop_id"] == "shop-1"
         assert record["conversation_id"] == "conv-1"
+
+
+def test_top_level_json_fields_are_not_duplicated_in_fields(
+    isolated_logging: Path,
+) -> None:
+    now = datetime(2026, 9, 19, 12, 10, tzinfo=timezone.utc)
+    configure_logging(
+        Settings(_env_file=None, log_dir=isolated_logging),
+        force=True,
+        clock=lambda: now,
+    )
+
+    logging.getLogger("app.middleware.logging").info(
+        "top_level_event",
+        extra={
+            "event": "top_level_event",
+            "method": "POST",
+            "path": "/qa",
+            "status_code": 200,
+            "duration_ms": 3.2,
+            "model": "test-model",
+            "business_key": "kept",
+        },
+    )
+
+    record = records_with_event(
+        isolated_logging / "2026-09-19" / "access.log", "top_level_event"
+    )[-1]
+    for key in ("event", "method", "path", "status_code", "duration_ms", "model"):
+        assert key in record
+        assert key not in record["fields"]
+    assert record["fields"]["business_key"] == "kept"
 
 
 @pytest.mark.asyncio

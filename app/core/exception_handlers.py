@@ -9,10 +9,20 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.core.exceptions import AppException, LLMInvocationError
+from app.core.logging import log_context
 from app.schemas.common import ApiResponse
 
 
 logger = logging.getLogger(__name__)
+
+
+def _request_log_context(request: Request) -> dict[str, object]:
+    """从请求状态恢复异常处理阶段可能已重置的日志上下文。"""
+    return {
+        field: value
+        for field in ("request_id", "trace_id", "conversation_id", "shop_id")
+        if (value := getattr(request.state, field, None)) is not None
+    }
 
 
 def _error_response(code: str, message: str, status_code: int) -> JSONResponse:
@@ -27,18 +37,19 @@ async def app_exception_handler(
 ) -> JSONResponse:
     """处理可预期的业务异常，并按异常定义返回 HTTP 状态码。"""
     log = logger.error if exc.status_code >= 500 else logger.warning
-    log(
-        "application_error code=%s method=%s path=%s",
-        exc.code,
-        request.method,
-        request.url.path,
-        extra={
-            "event": "application_error",
-            "method": request.method,
-            "path": request.url.path,
-            "status_code": exc.status_code,
-        },
-    )
+    with log_context(**_request_log_context(request)):
+        log(
+            "application_error code=%s method=%s path=%s",
+            exc.code,
+            request.method,
+            request.url.path,
+            extra={
+                "event": "application_error",
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": exc.status_code,
+            },
+        )
     # LLM wrappers may carry provider diagnostics; expose only the stable public
     # message and keep custom details server-side.
     public_message = (
@@ -55,16 +66,17 @@ async def validation_exception_handler(
 ) -> JSONResponse:
     """处理 Pydantic 参数校验错误，不在响应和日志中记录用户原文。"""
     locations = [".".join(map(str, error["loc"])) for error in exc.errors()]
-    logger.warning(
-        "request_validation_failed fields=%s",
-        ",".join(locations),
-        extra={
-            "event": "request_validation_failed",
-            "method": request.method,
-            "path": request.url.path,
-            "status_code": 422,
-        },
-    )
+    with log_context(**_request_log_context(request)):
+        logger.warning(
+            "request_validation_failed fields=%s",
+            ",".join(locations),
+            extra={
+                "event": "request_validation_failed",
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": 422,
+            },
+        )
     return _error_response("VALIDATION_ERROR", "请求参数校验失败", 422)
 
 
@@ -73,18 +85,19 @@ async def unhandled_exception_handler(
     exc: Exception,
 ) -> JSONResponse:
     """兜底处理未知异常：日志保留堆栈，客户端只收到通用提示。"""
-    logger.error(
-        "unhandled_exception method=%s path=%s",
-        request.method,
-        request.url.path,
-        exc_info=(type(exc), exc, exc.__traceback__),
-        extra={
-            "event": "unhandled_exception",
-            "method": request.method,
-            "path": request.url.path,
-            "status_code": 500,
-        },
-    )
+    with log_context(**_request_log_context(request)):
+        logger.error(
+            "unhandled_exception method=%s path=%s",
+            request.method,
+            request.url.path,
+            exc_info=(type(exc), exc, exc.__traceback__),
+            extra={
+                "event": "unhandled_exception",
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": 500,
+            },
+        )
     return _error_response("INTERNAL_SERVER_ERROR", "服务器内部错误", 500)
 
 

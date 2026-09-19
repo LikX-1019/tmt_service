@@ -53,6 +53,8 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 
         request.state.request_id = request_id
         request.state.trace_id = trace_id
+        request.state.shop_id = context.get("shop_id")
+        request.state.conversation_id = context.get("conversation_id")
         tokens = bind_log_context(**context)
         try:
             response = await call_next(request)

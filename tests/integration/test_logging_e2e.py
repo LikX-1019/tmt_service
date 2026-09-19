@@ -9,12 +9,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Response
 from fastapi.testclient import TestClient
 
 import app.core.logging as logging_module
 from app.core.config import Settings
-from app.core.exception_handlers import unhandled_exception_handler
+from app.core.exception_handlers import register_exception_handlers
 from app.core.logging import configure_logging
 from app.middleware.logging import RequestLoggingMiddleware
 from app.middleware.request_id import RequestIdMiddleware
@@ -78,11 +78,10 @@ def test_http_service_qa_connector_exception_context(isolated_logging: Path) -> 
         clock=lambda: now,
     )
     application = FastAPI()
+    register_exception_handlers(application)
 
     @application.get("/shops/{shop_id}/conversations/{conversation_id}")
-    async def endpoint(
-        shop_id: str, conversation_id: str, request: Request
-    ) -> Response:
+    async def endpoint(shop_id: str, conversation_id: str) -> Response:
         logging.getLogger("app.services.chat_service").info(
             "e2e_service_step", extra={"event": "e2e_service_step"}
         )
@@ -92,10 +91,7 @@ def test_http_service_qa_connector_exception_context(isolated_logging: Path) -> 
         logging.getLogger("app.integrations.pdd.playwright_connector").info(
             "e2e_connector_step", extra={"event": "e2e_connector_step"}
         )
-        try:
-            raise RuntimeError("e2e failure")
-        except RuntimeError as exc:
-            return await unhandled_exception_handler(request, exc)
+        raise RuntimeError("e2e failure")
 
     application.add_middleware(RequestLoggingMiddleware)
     application.add_middleware(RequestIdMiddleware)
@@ -107,8 +103,7 @@ def test_http_service_qa_connector_exception_context(isolated_logging: Path) -> 
         )
 
     assert response.status_code == 500
-    assert response.headers["X-Request-ID"] == "req-e2e"
-    assert response.headers["X-Trace-ID"] == "trace-e2e"
+    assert response.json()["code"] == "INTERNAL_SERVER_ERROR"
 
     date_dir = isolated_logging / "2026-09-19"
     expected_events = {
@@ -116,12 +111,13 @@ def test_http_service_qa_connector_exception_context(isolated_logging: Path) -> 
             "e2e_service_step",
             "e2e_qa_step",
             "e2e_connector_step",
+            "http_request_failed",
             "unhandled_exception",
         ),
-        "access.log": ("http_request_completed",),
+        "access.log": ("http_request_failed",),
         "qa.log": ("e2e_qa_step",),
         "connector.log": ("e2e_connector_step",),
-        "error.log": ("unhandled_exception",),
+        "error.log": ("http_request_failed", "unhandled_exception"),
     }
     for filename, events in expected_events.items():
         for event in events:

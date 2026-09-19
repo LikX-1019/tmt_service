@@ -287,7 +287,8 @@ trace 时二者相同。错误记录包含完整 `traceback`，但客户端只�
 | `app.audit` | `audit.log` | 是 | 预留审计 logger |
 | 任意 logger 的 `ERROR/CRITICAL` | `error.log` | 是 | 双写错误分流 |
 
-专项目志 handler 依赖 logger 默认 `propagate=True` 传播到 root；同一条日志会在专项目志
+日志配置会显式保持专项目志 logger 的 `propagate=True`，让分类日志继续传播到 root；
+同一条日志会在专项目志
 和 `app.log` 各出现一次，但不会在同一个文件内重复出现。`event`、`method`、`path`、
 `status_code`、`duration_ms`、`model` 等高频字段只保留在 JSON 顶层，其余 extra 字段
 放在 `fields`。
@@ -307,13 +308,16 @@ LOG_DATE=$(date +%F)
 # 1. 先看当日 ERROR / CRITICAL 和完整 traceback
 rg -n '"level": "(ERROR|CRITICAL)"' "logs/${LOG_DATE}/error.log"
 
-# 2. 按会话定位完整链路，并从结果中提取异常 request_id
+# 2. 已知错误事件时直接按 event 查，例如未处理异常
+rg -n -F '"event": "unhandled_exception"' "logs/${LOG_DATE}/error.log"
+
+# 3. 按会话定位完整链路，并从结果中提取异常 request_id
 rg -n -F '"conversation_id": "conv-123"' "logs/${LOG_DATE}"
 
-# 3. 按单次请求精确排查 HTTP、service、QA、connector 与异常日志
+# 4. 按单次请求精确排查 HTTP、service、QA、connector 与异常日志
 rg -n -F '"request_id": "req-123"' "logs/${LOG_DATE}"
 
-# 4. 需要跨服务/跨进程关联时按 trace 查询；默认等于 request_id
+# 5. 需要跨服务/跨进程关联时按 trace 查询；默认等于 request_id
 rg -n -F '"trace_id": "trace-123"' "logs/${LOG_DATE}"
 
 # 不确定具体日期时全量检索
