@@ -1,4 +1,4 @@
-"""Guard 后的纯条件路由函数。"""
+"""Guard 后的纯条件路由。"""
 
 from __future__ import annotations
 
@@ -6,10 +6,8 @@ from app.agent.state import AgentState
 
 
 def after_guard(state: AgentState) -> str:
-    """仅根据已完成 Guard 的状态决策返回 terminal 或 continue。"""
-    if state.context.get("guard_terminal") is True:
-        return "terminal"
-    if state.final_answer is not None:
+    """terminal rule 或 human decision 进入 response，否则进入 social。"""
+    if state.turn is not None and state.turn.reply is not None:
         return "terminal"
     if state.session is not None and state.session.human.required:
         return "terminal"

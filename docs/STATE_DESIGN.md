@@ -78,7 +78,8 @@ Unified Chat 与 PDD 最终共享同一个 AgentRuntime 和 AgentGraph。Node �
 项目处于 **Phase 2 — Unified Agent Graph Migration**，
 `GRAPH_MIGRATION_FREEZE = active`。Agent Graph 尚未完全接管；阶段计划、验收条件
 和回滚边界以 `docs/AGENT_GRAPH_MIGRATION.md` 为准。
-G1 的可执行 LangGraph Skeleton 已存在，但只在显式构造 Runtime 和测试中执行。
+G2A 已建立 Unified Chat 完整等价 Graph 和 Legacy/Graph parity 测试，但生产 Unified
+Chat 仍然使用 ChatService；Graph 只在显式构造 Runtime 和测试中执行。
 
 ### Implemented
 
@@ -94,6 +95,8 @@ G1 的可执行 LangGraph Skeleton 已存在，但只在显式构造 Runtime 和
 - 成功 Turn 在 completed checkpoint 写入后清理文件；失败或中断 checkpoint 保留用于恢复。
 - `AgentRuntime` 和 LangGraph StateGraph skeleton 可执行 `START → session_hydrate →
   guard → response → END`；Node 返回 `StatePatch` 并通过 `AgentState.apply_patch` 合并。
+- `AgentReplyState`、有界历史/商品引用状态和 Unified Chat FAQ/Guard/Social/Product/
+  Fallback Graph path 已实现，并通过 Legacy parity 测试。
 
 ### Runtime Boundary
 

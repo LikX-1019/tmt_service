@@ -68,6 +68,10 @@ ChatRoute = Literal[
     "fallback",
     "product",
     "product_selection",
+    "product_missing",
+    "product_not_found",
+    "product_link_invalid",
+    "product_link_unsupported",
 ]
 RiskLevel = Literal["low", "medium", "high"]
 ServiceStage = Literal["pre_sale", "post_sale", "general"]
@@ -202,11 +206,44 @@ class ProductResolutionState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     reference: ProductReference | None = None
-    status: Literal["not_required", "pending", "resolved", "not_found", "failed"] = (
-        "not_required"
-    )
+    status: Literal[
+        "not_required",
+        "pending",
+        "resolved",
+        "not_found",
+        "failed",
+        "selection_required",
+        "missing",
+        "invalid_link",
+        "unsupported_link",
+    ] = "not_required"
     context: ResolvedProductContext | None = None
+    recent_products: list[ConversationProductReferenceState] = Field(
+        default_factory=list
+    )
+    profile: dict[str, Any] = Field(default_factory=dict)
+    resolution_source: Literal[
+        "request",
+        "url",
+        "message_id",
+        "name_exact",
+        "name_unique_contains",
+        "history",
+        "history_semantic",
+        "name_candidates",
+        "conversation",
+        "none",
+    ] = "none"
     error_code: str | None = None
+
+
+class ConversationProductReferenceState(BaseModel):
+    """有界最近商品引用；名称只用于回指解析，不是完整商品事实。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    product_id: str = Field(min_length=1)
+    product_name: str = Field(min_length=1)
 
 
 class MemorySnippet(BaseModel):
@@ -230,6 +267,16 @@ class ShortTermMemoryState(BaseModel):
     last_user_message_id: str | None = None
     last_assistant_message_id: str | None = None
     max_recent_messages: int = Field(default=10, ge=1, le=100)
+    recent_turns: list[RecentTurnState] = Field(default_factory=list)
+
+
+class RecentTurnState(BaseModel):
+    """有界历史问答投影；完整历史 Source of Truth 仍在 MySQL。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    customer: str | None = None
+    assistant: str | None = None
 
 
 class LongTermMemoryState(BaseModel):
@@ -399,8 +446,62 @@ class ChatTurnState(BaseModel):
     risk_level: Literal["low", "medium", "high"] | None = None
     risk_reasons: list[str] = Field(default_factory=list)
     workflow: WorkflowState
+    reply: AgentReplyState | None = None
     started_at: datetime = Field(default_factory=utcnow)
     completed_at: datetime | None = None
+
+
+class AgentProductCandidateState(BaseModel):
+    """Graph 内部商品候选；由 API adapter 映射为响应视图。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    summary: str
+    internal_code: str | None = None
+    specifications: dict[str, str] = Field(default_factory=dict)
+
+
+class AgentSourceState(BaseModel):
+    """Graph 内部 QA 证据摘要。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    chunk_id: str | None = None
+    title: str | None = None
+    source: str | None = None
+    score: float | None = None
+
+
+class AgentReplyState(BaseModel):
+    """Turn 级最终回复契约；Graph 不直接依赖 API ChatResponse。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: Literal["rule", "product", "product_selection", "qa", "llm_fallback"]
+    route: str | None = None
+    answer: str
+    product_id: str | None = None
+    product_name: str | None = None
+    products: list[AgentProductCandidateState] = Field(default_factory=list)
+    product_resolution: Literal[
+        "request",
+        "url",
+        "message_id",
+        "name_exact",
+        "name_unique_contains",
+        "history",
+        "history_semantic",
+        "name_candidates",
+        "conversation",
+        "none",
+    ] = "none"
+    rule_name: str | None = None
+    reason_code: str | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    qa_hit: bool | None = None
+    sources: list[AgentSourceState] = Field(default_factory=list)
 
 
 class StatePatch(BaseModel):
@@ -425,6 +526,8 @@ class StatePatch(BaseModel):
     tool: ToolState | None = None
     human: HumanState | None = None
     workflow: WorkflowState | None = None
+    recent_turns: list[RecentTurnState] | None = None
+    reply: AgentReplyState | None = None
 
     intent: str | None = None
     route: ChatRoute | None = None
@@ -432,6 +535,7 @@ class StatePatch(BaseModel):
     risk_reasons: list[str] = Field(default_factory=list)
     draft_answer: str | None = None
     final_answer: str | None = None
+    fallback_reason: str | None = None
     next_node: str | None = None
 
 
@@ -468,6 +572,7 @@ class AgentState(BaseModel):
     risk_reasons: list[str] = Field(default_factory=list)
     draft_answer: str | None = None
     final_answer: str | None = None
+    fallback_reason: str | None = None
 
     status: WorkflowStatus = WorkflowStatus.READY
     current_node: str | None = None
@@ -526,6 +631,10 @@ class AgentState(BaseModel):
             if self.turn is None:
                 raise ValueError("更新 retrieval 前必须挂载 ChatTurnState")
             self.turn.retrieval = patch.retrieval
+        if patch.reply is not None:
+            if self.turn is None:
+                raise ValueError("更新 reply 前必须挂载 ChatTurnState")
+            self.turn.reply = patch.reply
         if patch.tool is not None:
             if self.turn is None:
                 raise ValueError("更新 tool 前必须挂载 ChatTurnState")
@@ -538,6 +647,10 @@ class AgentState(BaseModel):
                 self.turn.human = patch.human
         if patch.workflow is not None:
             self._apply_workflow_patch(patch.workflow)
+        if patch.recent_turns is not None:
+            if self.session is None:
+                raise ValueError("更新 recent_turns 前必须挂载 ChatSessionState")
+            self.session.short_term_memory.recent_turns = patch.recent_turns
 
         for field_name in (
             "intent",
@@ -545,6 +658,7 @@ class AgentState(BaseModel):
             "risk_level",
             "draft_answer",
             "final_answer",
+            "fallback_reason",
             "next_node",
         ):
             value = getattr(patch, field_name)

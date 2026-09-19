@@ -12,6 +12,7 @@ from app.agent.protocols import (
     ConditionalEdge,
 )
 from app.agent.runtime import AgentRuntime
+from app.agent.state_mappers import qa_result_to_patch, rule_result_to_patch
 from app.agent.state import (
     ActionStatus,
     AgentState,
@@ -74,4 +75,6 @@ __all__ = [
     "WorkflowState",
     "WorkflowStatus",
     "build_agent_graph",
+    "qa_result_to_patch",
+    "rule_result_to_patch",
 ]

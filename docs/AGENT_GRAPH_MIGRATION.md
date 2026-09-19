@@ -7,7 +7,9 @@ PHASE = Phase 2 — Unified Agent Graph Migration
 GRAPH_MIGRATION_FREEZE = active
 G0 = COMPLETED
 G1 = COMPLETED
-G2 = NOT_STARTED
+G2 = IN_PROGRESS
+G2A = COMPLETED
+G2B = NOT_STARTED
 PLAN_VERSION = 1
 BASELINE_DATE = 2026-09-20
 ```
@@ -148,17 +150,28 @@ G1 已完成，运行契约和验收证据见 `docs/AGENT_GRAPH_G1_RUNTIME.md`�
 * Agent tests：84 passed；full regression：453 passed；ruff、diff-check、
   `uv sync --frozen` 通过。
 
-### Phase G2 — Unified Chat Migration
+### Phase G2 — Unified Chat Migration (subphased)
 
 | Item | Boundary |
 |---|---|
-| Status | `NOT_STARTED` |
+| Status | `IN_PROGRESS` |
 | Goal | `/api/v1/chat` 默认从 `ChatService` Facade 进入 AgentRuntime，不再由 `_route_chat()` 决策。 |
 | Scope | ChatService 请求适配、运行上下文创建、AgentRuntime invocation、ChatResponse 映射；迁移 Social、Intent、Product、FAQ、RAG、Fallback、Human、Response。 |
 | Prohibited | 静默改变 FAQ exact 与 Guard 的先后顺序；改变 API contract；重写 QA/Product 内部算法；绕过 StatePatch。 |
 | Tests | G0 characterization 全量对照；API contract tests；conversation product binding tests；failure/resume tests。 |
 | Acceptance | 旧 orchestrator 输入 X 输出 Y，Graph 输入相同 X 输出等价 Y；ChatService 不再包含大规模客服流程判断。 |
 | Rollback | 可通过明确开关恢复旧路径；开关删除前不得宣布该阶段完成。 |
+
+G2 split into:
+
+```text
+G2A — Unified Chat Graph Parity
+G2B — Unified Chat Production Cutover
+```
+
+`G2A` builds and tests the complete equivalent Unified Chat decision graph without
+connecting production. `G2B` is the only phase allowed to make `ChatService`
+facade invoke `AgentRuntime`, with an explicit short-lived rollback switch.
 
 ### Phase G3 — StatePatch + Node Checkpoint Integration
 
@@ -178,8 +191,8 @@ G1 已完成，运行契约和验收证据见 `docs/AGENT_GRAPH_G1_RUNTIME.md`�
 |---|---|
 | Status | `NOT_STARTED` |
 | Goal | Unified Chat 的全部主要业务步骤由业务级 Graph Node 表达。 |
-| Scope | ProductResolve/ProductLoad/ProductAnswer、Social、Intent、FAQ、RAG、Fallback、HumanTransfer、Response Node 及对应 Conditional Edge。 |
-| Prohibited | 把 ProductResolver、SemanticProductResolver、QAService、RuleRegistry、ContextualFallbackService 的实现复制进 Node；借机新增 Tool、Memory 或 Intent 业务。 |
+| Scope | Graph business hardening / residual decomposition; subgraph cleanup; remove transitional compatibility; prepare Shared Agent capabilities for PDD reuse. |
+| Prohibited | 重复 G2 的 Unified Chat initial migration；把 ProductResolver、SemanticProductResolver、QAService、RuleRegistry、ContextualFallbackService 的实现复制进 Node；借机新增 Tool、Memory 或 Intent 业务。 |
 | Tests | 每个业务分支有 before/after 等价回归；边界输入和错误分支有断言；可观测字段一致。 |
 | Acceptance | 主要业务决策不再从 `_route_chat()` 发起；分支由 Conditional Edge 表达；能力层调用关系保持 `Node → Service → Repository/Tool`。 |
 | Rollback | 按业务路径切换和回滚，避免一次性删除旧逻辑。 |

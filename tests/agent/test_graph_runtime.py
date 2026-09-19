@@ -8,6 +8,7 @@ import pytest
 from langgraph.graph import END, START, StateGraph
 
 from app.agent.chat_runtime import ChatStateRuntime
+from app.agent.dependencies import default_capabilities
 from app.agent.edges.guard_edge import after_guard
 from app.agent.graph import GraphNodeAdapter, build_agent_graph
 from app.agent.nodes.guard import GuardNode
@@ -21,6 +22,7 @@ from app.agent.protocols import (
 from app.agent.runtime import AgentRuntime
 from app.agent.state import (
     AgentState,
+    AgentReplyState,
     ChatSessionState,
     ChatTurnState,
     StatePatch,
@@ -41,8 +43,8 @@ def _state(message: str) -> AgentState:
 async def _hydrated_guard_state(message: str) -> AgentState:
     """测试辅助：执行 hydrate 与 guard，生成可路由状态。"""
     state = _state(message)
-    await SessionHydrateNode()(state)
-    guard_patch = await GuardNode()(state)
+    await SessionHydrateNode(default_capabilities())(state)
+    guard_patch = await GuardNode(default_capabilities())(state)
     state.apply_patch(guard_patch)
     return state
 
@@ -72,7 +74,15 @@ async def test_agent_runtime_invokes_graph_async_and_returns_agent_state() -> No
     assert isinstance(result.session, ChatSessionState)
     assert isinstance(result.turn, ChatTurnState)
     assert result.status is WorkflowStatus.COMPLETED
-    assert result.completed_nodes == ["session_hydrate", "guard", "response"]
+    assert result.completed_nodes == [
+        "session_hydrate",
+        "faq_exact",
+        "guard",
+        "social",
+        "product_resolve",
+        "fallback",
+        "response",
+    ]
 
 
 @pytest.mark.asyncio
@@ -80,14 +90,24 @@ async def test_business_nodes_return_state_patch() -> None:
     """业务节点契约固定为 AgentState 输入、StatePatch 输出。"""
     state = _state("这个商品怎么使用")
 
-    hydrate_patch = await SessionHydrateNode()(state)
-    guard_patch = await GuardNode()(state)
+    hydrate_patch = await SessionHydrateNode(default_capabilities())(state)
+    guard_patch = await GuardNode(default_capabilities())(state)
+    state.apply_patch(guard_patch)
+    state.apply_patch(
+        StatePatch(
+            reply=AgentReplyState(
+                source="rule",
+                answer="test",
+            ),
+            final_answer="test",
+        )
+    )
     response_patch = await ResponseNode()(state)
 
     assert isinstance(hydrate_patch, StatePatch)
     assert isinstance(guard_patch, StatePatch)
     assert isinstance(response_patch, StatePatch)
-    assert hydrate_patch.next_node == "guard"
+    assert hydrate_patch.next_node == "faq_exact"
     assert response_patch.next_node is None
 
 
@@ -213,8 +233,9 @@ async def test_runtime_revalidates_invalid_graph_output() -> None:
 
 def test_runtime_satisfies_agent_node_contract() -> None:
     """Node Protocol 是 runtime-checkable，三个 Skeleton 节点都符合契约。"""
-    assert isinstance(SessionHydrateNode(), AgentNode)
-    assert isinstance(GuardNode(), AgentNode)
+    capabilities = default_capabilities()
+    assert isinstance(SessionHydrateNode(capabilities), AgentNode)
+    assert isinstance(GuardNode(capabilities), AgentNode)
     assert isinstance(ResponseNode(), AgentNode)
 
 
