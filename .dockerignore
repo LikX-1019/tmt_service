@@ -1,0 +1,42 @@
+# Never bake local secrets or machine-specific state into the runtime image.
+.env
+.env.*
+!.env.example
+
+# Git and local tooling
+.git
+.github
+.claude
+.codex-tmp
+.idea
+.vscode
+.gitnexus
+
+# Python caches and build output
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# Local runtime, logs, models, and business data are mounted/configured separately.
+data/
+logs/
+model/
+*.log
+*.sqlite
+*.sqlite3
+
+# Tests and docs are not required inside the production image.
+tests/
+docs/
+
+# Dependency service assets use their own Compose build/runtime context.
+docker/
+
+# OS metadata
+.DS_Store
