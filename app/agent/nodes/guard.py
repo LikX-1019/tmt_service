@@ -41,7 +41,7 @@ class GuardNode:
                 channel="unified_chat",
             ),
         )
-        return rule_result_to_patch(result, next_node="response")
+        return rule_result_to_patch(result)
 
 
 guard_node = GuardNode

@@ -32,7 +32,7 @@ from app.agent.state import (
 
 def _state(message: str) -> AgentState:
     """创建满足 Session/Turn 契约的最小输入状态。"""
-    return ChatStateRuntime().create_state(
+    return ChatStateRuntime(lifecycle_mode="graph").create_state(
         message=message,
         conversation_id=f"conversation-{message}",
         customer_id="customer-1",

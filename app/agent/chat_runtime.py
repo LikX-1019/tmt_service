@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
 from app.agent.checkpoint import CheckpointStore
@@ -110,12 +110,19 @@ class ChatStateRuntime:
         checkpoint_store: CheckpointStore | None = None,
         *,
         cleanup_completed: bool = True,
+        coordinator: StateCoordinator | None = None,
+        lifecycle_mode: Literal["graph", "legacy"] = "legacy",
     ) -> None:
         self._store = checkpoint_store
         self._coordinator = (
-            StateCoordinator(checkpoint_store) if checkpoint_store is not None else None
+            coordinator
+            if coordinator is not None
+            else StateCoordinator(checkpoint_store)
+            if checkpoint_store is not None
+            else None
         )
         self._cleanup_completed = cleanup_completed
+        self.lifecycle_mode = lifecycle_mode
 
     def create_state(
         self,
@@ -124,11 +131,17 @@ class ChatStateRuntime:
         conversation_id: str | None,
         customer_id: str | None,
         service_stage: str | None,
+        entry_node: str | None = None,
     ) -> AgentState:
+        entry = entry_node or (
+            "session_hydrate"
+            if self.lifecycle_mode == "graph"
+            else CHAT_TURN_NODE
+        )
         run_id = str(uuid4())
         turn_id = str(uuid4())
         session_id = conversation_id or f"chat-{uuid4()}"
-        workflow = WorkflowState(run_id=run_id, next_node=CHAT_TURN_NODE)
+        workflow = WorkflowState(run_id=run_id, next_node=entry)
         session = ChatSessionState(
             session_id=session_id,
             thread_id=session_id,
@@ -160,12 +173,15 @@ class ChatStateRuntime:
             session=session,
             turn=turn,
             messages=[input_message],
-            next_node=CHAT_TURN_NODE,
+            next_node=entry,
         )
         state.sync_contract_state()
         return state
 
     async def start(self, state: AgentState) -> None:
+        if self.lifecycle_mode == "graph":
+            # AgentRuntime owns workflow_created and StateCoordinator owns each node.
+            return
         if self._coordinator is not None:
             await self._coordinator.create(state)
         state.begin_node(CHAT_TURN_NODE)
@@ -285,17 +301,6 @@ class ChatStateRuntime:
         self._record_response(state, response)
         turn = _require_turn(state)
         session = _require_session(state)
-        if state.completed_nodes and state.completed_nodes[-1] == CHAT_TURN_NODE:
-            # Legacy mode owns the outer chat_turn node; preserve its completed trace.
-            outer_node = CHAT_TURN_NODE
-            graph_completed_nodes = state.completed_nodes[:-1]
-            graph_node_trace = state.node_trace[:-1]
-        else:
-            outer_node = CHAT_TURN_NODE
-            graph_completed_nodes = state.completed_nodes
-            graph_node_trace = state.node_trace
-        state.completed_nodes = [outer_node, *graph_completed_nodes]
-        state.node_trace = [*state.node_trace, *graph_node_trace]
         output_message = StateMessage(
             role="assistant",
             content=response.answer,
@@ -309,9 +314,19 @@ class ChatStateRuntime:
         session.short_term_memory.last_assistant_message_id = output_message.id
         state.final_answer = response.answer
         turn.completed_at = utcnow()
-        state.complete_node(CHAT_TURN_NODE)
+        if self.lifecycle_mode == "legacy":
+            state.complete_node(CHAT_TURN_NODE)
+        else:
+            state.sync_contract_state()
         if self._store is not None:
-            await self._store.save(state, reason=f"after:{CHAT_TURN_NODE}")
+            await self._store.save(
+                state,
+                reason=(
+                    f"after:{CHAT_TURN_NODE}"
+                    if self.lifecycle_mode == "legacy"
+                    else "workflow_completed"
+                ),
+            )
             if self._cleanup_completed:
                 try:
                     await self._store.delete(state.run_id)
@@ -327,6 +342,27 @@ class ChatStateRuntime:
     async def fail(self, state: AgentState, error: Exception) -> None:
         error_code = type(error).__name__.upper()
         turn = _require_turn(state)
+        if self.lifecycle_mode == "graph":
+            # No virtual chat_turn exists in graph mode. Persist a transport-level
+            # failure only when a non-node Graph error escapes without durable state.
+            if state.status is WorkflowStatus.COMPLETED:
+                return
+            if state.error is None:
+                state.status = WorkflowStatus.FAILED
+                state.resume_from = None
+                state.error = StateError(
+                    node="graph_transport",
+                    code=error_code,
+                    message="Agent Graph transport failure",
+                    retryable=True,
+                )
+            state.sync_contract_state()
+            if self._store is not None:
+                await self._store.save(
+                    state,
+                    reason=f"failed:{state.error.node}",
+                )
+            return
         graph_failure = (
             state.error is not None
             and state.current_node is None

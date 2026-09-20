@@ -45,7 +45,9 @@ class StateCoordinator:
             patch = await handler(state.model_copy(deep=True))
             if patch is not None:
                 state.apply_patch(patch)
-            state.complete_node(node, next_node=state.next_node)
+            # StatePatch.next_node=None is meaningful at terminal nodes; do not
+            # fall back to the previous route merely because apply_patch ignores None.
+            state.complete_node(node, next_node=patch.next_node if patch else None)
             return await self._store.save(state, reason=f"after:{node}")
         except Exception as exc:
             error_code = type(exc).__name__.upper()
@@ -111,6 +113,21 @@ class StateCoordinator:
         if state is None:
             return None
 
+        # G2B-era legacy checkpoints point at the virtual chat_turn node. They
+        # cannot safely restart business nodes after an unknown interruption.
+        if (
+            state.next_node == "chat_turn"
+            and state.status
+            in {WorkflowStatus.READY, WorkflowStatus.RUNNING, WorkflowStatus.FAILED}
+        ):
+            state.status = WorkflowStatus.WAITING_MANUAL
+            state.current_node = None
+            state.resume_from = None
+            return await self._store.save(
+                state,
+                reason="resume_manual:legacy_chat_turn",
+            )
+
         action = state.pending_action
         if action and action.status in {
             ActionStatus.EXECUTING,
@@ -138,8 +155,10 @@ class StateCoordinator:
 
         if state.status == WorkflowStatus.RUNNING:
             state.status = WorkflowStatus.READY
-            state.next_node = state.resume_from or state.current_node
+            next_node = state.resume_from or state.current_node
             state.current_node = None
+            state.resume_from = None
+            state.next_node = next_node
             return await self._store.save(state, reason="resume_interrupted_node")
 
         if (
@@ -149,6 +168,7 @@ class StateCoordinator:
         ):
             state.status = WorkflowStatus.READY
             state.next_node = state.resume_from
+            state.resume_from = None
             return await self._store.save(state, reason="resume_retryable_failure")
 
         return state

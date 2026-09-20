@@ -354,8 +354,9 @@ async def test_runtime_checkpoint_recovers_interrupted_turn(tmp_path: Path) -> N
     restored = await StateCoordinator(store).load_for_resume(state.run_id)
 
     assert restored is not None
-    assert restored.status == WorkflowStatus.READY
+    assert restored.status == WorkflowStatus.WAITING_MANUAL
     assert restored.next_node == "chat_turn"
+    assert restored.resume_from is None
     assert restored.session is not None
     assert restored.session.current_product is not None
     assert restored.session.current_product.product_id == "1001"

@@ -10,7 +10,8 @@ G1 = COMPLETED
 G2 = COMPLETED
 G2A = COMPLETED
 G2B = COMPLETED
-G3 = NOT_STARTED
+G3 = COMPLETED
+G4 = NOT_STARTED
 PLAN_VERSION = 1
 BASELINE_DATE = 2026-09-20
 ```
@@ -32,7 +33,9 @@ AgentRuntime
     ↓
 Unified Chat AgentGraph
     ↓
-FAQ / Guard / Social / Product / Fallback Node 编排
+StateCoordinator
+    ↓
+FileCheckpointStore
 ```
 
 ```text
@@ -190,6 +193,8 @@ G2B cutover evidence lives in `docs/AGENT_GRAPH_G2B_CUTOVER.md`. Summary:
 * No automatic Graph-to-Legacy fallback exists.
 * Validation: agent 110, chat service 30, chat API 10, full suite 479 passed.
 
+G3 durable checkpoint evidence lives in `docs/AGENT_GRAPH_G3_CHECKPOINT.md`.
+
 ### Phase G3 — StatePatch + Node Checkpoint Integration
 
 | Item | Boundary |
@@ -201,6 +206,9 @@ G2B cutover evidence lives in `docs/AGENT_GRAPH_G2B_CUTOVER.md`. Summary:
 | Tests | checkpoint revision/conflict tests；failed node resume tests；PendingAction EXECUTING/UNCERTAIN tests；旧 checkpoint schema upgrade tests。 |
 | Acceptance | 每个真实 Node 生命周期可恢复；失败节点不产生半完成业务状态；副作用不确定时转人工。 |
 | Rollback | 保留旧 recorder 路径直到新 checkpoint 证明等价后切换。 |
+
+G3 completed durable node lifecycle without LangGraph checkpointer or automatic
+startup recovery. See `docs/AGENT_GRAPH_G3_CHECKPOINT.md`.
 
 ### Phase G4 — Product / Social / FAQ / RAG / Fallback Full Migration
 
@@ -317,8 +325,8 @@ Memory Store 是能力层，不是 Graph 本身。
 - [ ] `ConsoleRuntime` 不再承担 AI workflow。
 - [ ] Guard、Social、Intent、Product、FAQ、RAG、Fallback、Human、Response 主要业务步骤由 Graph Node 表达。
 - [ ] 主要业务分支由 Conditional Edge 表达。
-- [ ] StatePatch 是 Node 状态更新机制。
-- [ ] Checkpoint 与 Node execution 对齐。
+- [x] StatePatch 是 Node 状态更新机制。
+- [x] Checkpoint 与 Node execution 对齐。
 - [ ] Customer Demo 与 PDD 共享相同 Agent Runtime。
 - [ ] 旧 orchestrator 已删除或降级为薄 adapter。
 - [ ] 完整测试通过；skipped 项均有外部原因。

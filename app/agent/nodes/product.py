@@ -364,7 +364,11 @@ class ProductLoadNode:
                 profile=product.model_dump(mode="json"),
                 resolution_source=turn.product.resolution_source,
             ),
-            next_node="product_answer",
+            next_node=(
+                "product_answer"
+                if state.context.get("product_answer_required") is True
+                else "fallback"
+            ),
         )
 
 

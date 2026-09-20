@@ -8,6 +8,7 @@ import pytest
 
 from app.agent.checkpoint import FileCheckpointStore
 from app.agent.chat_runtime import ChatStateRuntime
+from app.agent.coordinator import StateCoordinator
 from app.agent.dependencies import AgentCapabilities
 from app.agent.graph import build_unified_chat_graph
 from app.agent.protocols import AgentGraphExecutionError
@@ -132,14 +133,23 @@ def make_service(
     store = (
         FileCheckpointStore(checkpoint_dir) if checkpoint_dir else None
     )
-    state_runtime = ChatStateRuntime(store, cleanup_completed=False)
+    coordinator = StateCoordinator(store) if store is not None else None
+    state_runtime = ChatStateRuntime(
+        store,
+        cleanup_completed=False,
+        lifecycle_mode=mode,
+    )
     conversations = FakeConversations()
     caps = capabilities_instance or capabilities(conversations=conversations)
     service = ChatService(
         conversation_repository=conversations,
         message_repository=messages,
         state_runtime=state_runtime,
-        agent_runtime=runtime or AgentRuntime(build_unified_chat_graph(caps)),
+        agent_runtime=runtime
+        or AgentRuntime(
+            build_unified_chat_graph(caps, coordinator=coordinator),
+            coordinator=coordinator,
+        ),
         runtime_mode=mode,
     )
     return service, state_runtime, store
@@ -319,7 +329,6 @@ async def test_graph_success_checkpoint_preserves_node_trace(tmp_path: Path):
     assert saved.status.value == "completed"
     assert saved.error is None
     assert saved.current_node is None
-    assert "chat_turn" in saved.completed_nodes
     assert "faq_exact" in saved.completed_nodes
     assert "response" in saved.completed_nodes
 

@@ -8,6 +8,9 @@ from typing import Any
 import pytest
 
 from app.agent.dependencies import AgentCapabilities
+from app.agent.checkpoint import FileCheckpointStore
+from app.agent.chat_runtime import ChatStateRuntime
+from app.agent.coordinator import StateCoordinator
 from app.agent.graph import build_unified_chat_graph
 from app.agent.runtime import AgentRuntime
 from app.services.chat_response_mapper import agent_state_to_chat_response
@@ -167,10 +170,9 @@ def product_response(index=1):
 
 
 def graph_state(message, product_id=None):
-    from app.agent.chat_runtime import ChatStateRuntime
     from app.agent.state import ProductReference
 
-    state = ChatStateRuntime().create_state(
+    state = ChatStateRuntime(lifecycle_mode="graph").create_state(
         message=message,
         conversation_id=f"c-{message}",
         customer_id="u1",
@@ -233,7 +235,11 @@ def capabilities(
         conversations=graph_repo,
         products=product_repo,
     )
-    return legacy, AgentRuntime(build_unified_chat_graph(caps))
+    coordinator = StateCoordinator(FileCheckpointStore())
+    return legacy, AgentRuntime(
+        build_unified_chat_graph(caps, coordinator=coordinator),
+        coordinator=coordinator,
+    )
 
 
 async def _async(value):

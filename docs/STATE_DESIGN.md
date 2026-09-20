@@ -107,12 +107,12 @@ AgentRuntime 和 Unified Chat AgentGraph。`_route_chat()` 只保留为显式 `l
   PostgreSQL-backed product API。
 - 每个 HTTP 请求创建新 `run_id` / `turn_id`；相同 `conversation_id` 复用 `session_id`，但不复用上一轮商品事实快照。
 - 下一轮商品追问仍通过 MySQL binding 得到 `product_id`，并重新读取 PostgreSQL 商品资料。
-- AgentGraph now controls production Unified Chat decisions; PDD still uses
-  ConsoleRuntime.
-- Graph Node lifecycle 目前只在内存中更新；FileCheckpointStore 与每个真实 Node 的
-  持久化对齐属于 G3。
-- ChatStateRuntime 仍提供粗粒度 `chat_turn` durable checkpoint，并会保留 Graph
-  失败节点信息；Node-level durable checkpoint/resume 尚未实现。
+- Unified Chat production uses AgentGraph; PDD still uses ConsoleRuntime.
+- 每个 Unified Chat production Graph Node lifecycle 由 StateCoordinator durable
+  checkpoint：before / after / failed。
+- StateCoordinator 拥有 Node lifecycle；AgentRuntime 可从 actual next/failed node
+  显式恢复，但没有 automatic startup recovery。
+- Legacy rollback 仍保留粗粒度 `chat_turn` checkpoint。
 
 ### Planned For Graph Migration
 

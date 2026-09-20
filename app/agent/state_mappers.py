@@ -23,11 +23,10 @@ def _utcnow() -> datetime:
 
 def rule_result_to_patch(
     result: RuleEvaluationResult,
-    *,
-    next_node: str,
 ) -> StatePatch:
     """把确定性规则结果映射为 StatePatch，不修改任何 State。"""
     terminal = result.terminal_decision
+    next_node = "response" if terminal is not None else "social"
     primary = terminal or (result.decisions[0] if result.decisions else None)
     patch = StatePatch(
         context={

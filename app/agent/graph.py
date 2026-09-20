@@ -9,6 +9,8 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from app.agent.dependencies import AgentCapabilities, default_capabilities
+from app.agent.coordinator import StateCoordinator
+from app.agent.edges.entry_edge import route_graph_entry
 from app.agent.edges.faq_edge import after_faq
 from app.agent.edges.guard_edge import after_guard
 from app.agent.edges.product_edge import after_product_load, after_product_resolve
@@ -42,9 +44,18 @@ def _safe_error_code(exc: BaseException) -> str:
 class GraphNodeAdapter:
     """LangGraph transport adapter：StatePatch 合并与节点生命周期。"""
 
-    def __init__(self, node_name: str, node: AgentNode) -> None:
+    def __init__(
+        self,
+        node_name: str,
+        node: AgentNode,
+        *,
+        coordinator: StateCoordinator | None = None,
+        retryable: bool = True,
+    ) -> None:
         self.node_name = node_name
         self._node = node
+        self._coordinator = coordinator
+        self._retryable = retryable
 
     async def __call__(self, raw_state: Any) -> dict[str, Any]:
         try:
@@ -55,6 +66,16 @@ class GraphNodeAdapter:
             ) from exc
         working = state.model_copy(deep=True)
         try:
+            if self._coordinator is not None:
+                # Durable mode: StateCoordinator is the only lifecycle owner.
+                working = await self._coordinator.run_node(
+                    working,
+                    self.node_name,
+                    self._node,
+                    retryable=self._retryable,
+                )
+                return working.model_dump()
+
             working.begin_node(self.node_name)
             patch = await self._node(working)
             if not isinstance(patch, StatePatch):
@@ -63,6 +84,14 @@ class GraphNodeAdapter:
             working.complete_node(self.node_name, next_node=patch.next_node)
             return working.model_dump()
         except Exception as exc:
+            if self._coordinator is not None:
+                # run_node has already saved failed:<node>; never fail it twice.
+                raise AgentNodeExecutionError(
+                    f"Agent Node {self.node_name} 执行失败",
+                    failed_state=working,
+                    node_name=self.node_name,
+                    original_exception=exc,
+                ) from exc
             working = _safe_failed_state(working, self.node_name, exc)
             raise AgentNodeExecutionError(
                 f"Agent Node {self.node_name} 执行失败",
@@ -93,6 +122,7 @@ def _safe_failed_state(
 
 def build_unified_chat_graph(
     capabilities: AgentCapabilities | None = None,
+    coordinator: StateCoordinator | None = None,
 ) -> CompiledStateGraph:
     """构建与 Legacy Unified Chat 顺序等价的最小 G2A Graph。"""
     caps = capabilities or default_capabilities()
@@ -109,9 +139,16 @@ def build_unified_chat_graph(
         "response": ResponseNode(),
     }
     for name, node in nodes.items():
-        builder.add_node(name, GraphNodeAdapter(name, node))
+        builder.add_node(
+            name,
+            GraphNodeAdapter(name, node, coordinator=coordinator),
+        )
 
-    builder.add_edge(START, "session_hydrate")
+    builder.add_conditional_edges(
+        START,
+        route_graph_entry,
+        {name: name for name in nodes},
+    )
     builder.add_edge("session_hydrate", "faq_exact")
     builder.add_conditional_edges(
         "faq_exact",

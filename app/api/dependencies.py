@@ -9,6 +9,7 @@ from fastapi import Request
 
 from app.agent.chat_runtime import ChatStateRuntime
 from app.agent.checkpoint import FileCheckpointStore
+from app.agent.coordinator import StateCoordinator
 from app.agent.dependencies import AgentCapabilities
 from app.agent.graph import build_unified_chat_graph
 from app.agent.runtime import AgentRuntime
@@ -52,6 +53,8 @@ def get_chat_service() -> ChatService:
     social_router = SocialRouter()
     product_resolver = ProductResolver()
     semantic_products = SemanticProductResolver()
+    checkpoint_store = FileCheckpointStore()
+    coordinator = StateCoordinator(checkpoint_store)
     capabilities = AgentCapabilities(
         rules=rules,
         social_router=social_router,
@@ -70,8 +73,15 @@ def get_chat_service() -> ChatService:
         product_repository=products,
         fallback_service=fallback_service,
         qa_provider=get_qa_service,
-        state_runtime=ChatStateRuntime(FileCheckpointStore()),
-        agent_runtime=AgentRuntime(build_unified_chat_graph(capabilities)),
+        state_runtime=ChatStateRuntime(
+            checkpoint_store,
+            coordinator=coordinator,
+            lifecycle_mode=get_settings().unified_chat_runtime,
+        ),
+        agent_runtime=AgentRuntime(
+            build_unified_chat_graph(capabilities, coordinator=coordinator),
+            coordinator=coordinator,
+        ),
         runtime_mode=get_settings().unified_chat_runtime,
     )
 

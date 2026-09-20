@@ -203,6 +203,8 @@ class ChatService:
         self._runtime_mode = (
             runtime_mode or ("graph" if agent_runtime is not None else "legacy")
         )
+        if isinstance(self._state_runtime, ChatStateRuntime):
+            self._state_runtime.lifecycle_mode = self._runtime_mode
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         if request.conversation_id is None:
@@ -266,7 +268,6 @@ class ChatService:
             if isinstance(exc, AgentGraphError):
                 if exc.failed_state is not None:
                     state = exc.failed_state
-                await self._state_runtime.fail(state, exc)
                 original = exc.original_exception
                 if isinstance(original, AppException):
                     raise original from exc
