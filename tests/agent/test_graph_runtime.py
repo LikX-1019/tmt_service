@@ -239,16 +239,8 @@ def test_runtime_satisfies_agent_node_contract() -> None:
     assert isinstance(ResponseNode(), AgentNode)
 
 
-def test_production_paths_do_not_reference_graph_runtime() -> None:
-    """静态检查生产装配与两个 Legacy orchestrator 未引用 G1 Runtime。"""
-    production_files = [
-        Path("app/api/dependencies.py"),
-        Path("app/services/chat_service.py"),
-        Path("app/services/console_runtime.py"),
-    ]
-    forbidden = ("AgentRuntime", "build_agent_graph")
-
-    for path in production_files:
-        source = path.read_text(encoding="utf-8")
-        for symbol in forbidden:
-            assert symbol not in source
+def test_pdd_production_path_does_not_reference_unified_graph_runtime() -> None:
+    """G2B 只切 Unified Chat；PDD production 不得引用 Unified Graph Runtime。"""
+    source = Path("app/services/console_runtime.py").read_text(encoding="utf-8")
+    assert "AgentRuntime" not in source
+    assert "build_unified_chat_graph" not in source

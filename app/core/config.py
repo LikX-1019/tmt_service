@@ -39,6 +39,8 @@ class Settings(BaseSettings):
         le=65535,
         validation_alias=AliasChoices("APP_PORT", "PORT"),
     )
+    # TEMPORARY MIGRATION SWITCH: legacy is emergency rollback only, remove in G6.
+    unified_chat_runtime: Literal["graph", "legacy"] = "graph"
     sqlalchemy_database_url: str | None = Field(
         default=None,
         validation_alias="DATABASE_URL",
@@ -269,6 +271,7 @@ class Settings(BaseSettings):
         return {
             "app_env": self.app_env,
             "app_debug": self.app_debug,
+            "unified_chat_runtime": self.unified_chat_runtime,
             "log_level": self.log_level,
             "log_dir": str(self.log_dir),
             "log_retention_days": self.log_retention_days,

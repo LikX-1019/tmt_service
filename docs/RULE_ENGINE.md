@@ -5,16 +5,22 @@
 ### Current
 
 ```text
-ChatService
+POST /api/v1/chat
+    ↓
+AgentRuntime
+    ↓
+faq_exact
+    ↓
+GuardNode
     ↓
 RuleRegistry
 ```
 
-Unified Chat currently invokes `RuleRegistry` directly inside
-`ChatService._route_chat()`. PDD currently reaches a separate procedural decision
-chain through `ConsoleRuntime._evaluate_batch()`. FAQ exact matching currently runs
-before rules in Unified Chat; this is the recorded behavior and must not be changed
-without the regression baseline required by `docs/AGENT_GRAPH_MIGRATION.md`.
+Production Unified Chat now reaches `RuleRegistry` through `AgentRuntime` and
+`GuardNode` after `faq_exact`. PDD currently still reaches a separate procedural
+decision chain through `ConsoleRuntime._evaluate_batch()`. FAQ-before-Guard is
+current compatibility behavior and remains tracked migration debt; it is not the
+final safety architecture.
 
 ### Target
 

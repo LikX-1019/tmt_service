@@ -78,8 +78,9 @@ Unified Chat 与 PDD 最终共享同一个 AgentRuntime 和 AgentGraph。Node �
 项目处于 **Phase 2 — Unified Agent Graph Migration**，
 `GRAPH_MIGRATION_FREEZE = active`。Agent Graph 尚未完全接管；阶段计划、验收条件
 和回滚边界以 `docs/AGENT_GRAPH_MIGRATION.md` 为准。
-G2A 已建立 Unified Chat 完整等价 Graph 和 Legacy/Graph parity 测试，但生产 Unified
-Chat 仍然使用 ChatService；Graph 只在显式构造 Runtime 和测试中执行。
+G2B 已完成 Unified Chat 生产切流：生产 `/api/v1/chat` 通过 ChatService Facade 进入
+AgentRuntime 和 Unified Chat AgentGraph。`_route_chat()` 只保留为显式 `legacy`
+回滚路径。PDD 仍使用 ConsoleRuntime。
 
 ### Implemented
 
@@ -106,10 +107,12 @@ Chat 仍然使用 ChatService；Graph 只在显式构造 Runtime 和测试中执
   PostgreSQL-backed product API。
 - 每个 HTTP 请求创建新 `run_id` / `turn_id`；相同 `conversation_id` 复用 `session_id`，但不复用上一轮商品事实快照。
 - 下一轮商品追问仍通过 MySQL binding 得到 `product_id`，并重新读取 PostgreSQL 商品资料。
-- Production Unified Chat 仍使用 ChatService，PDD 仍使用 ConsoleRuntime；Agent Graph /
-  LangGraph 尚未接管生产流量。
+- AgentGraph now controls production Unified Chat decisions; PDD still uses
+  ConsoleRuntime.
 - Graph Node lifecycle 目前只在内存中更新；FileCheckpointStore 与每个真实 Node 的
   持久化对齐属于 G3。
+- ChatStateRuntime 仍提供粗粒度 `chat_turn` durable checkpoint，并会保留 Graph
+  失败节点信息；Node-level durable checkpoint/resume 尚未实现。
 
 ### Planned For Graph Migration
 

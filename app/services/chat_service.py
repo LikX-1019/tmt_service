@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable, Sequence
+from typing import Literal
 from uuid import uuid4
 from typing import Any
 
 from app.agent.chat_runtime import ChatStateRuntime
+from app.agent.protocols import AgentGraphError
+from app.agent.runtime import AgentRuntime
 from app.agent.state import AgentState
 from app.core.exceptions import AppException, LLMInvocationError, ProductServiceUnavailableError
 from app.models.chat import ChatConversationProduct
@@ -33,6 +36,7 @@ from app.services.product_resolver import (
 from app.services.semantic_product_resolver import SemanticProductResolver
 from app.services.social_router import SocialDecision, SocialRouter
 from app.services.contextual_fallback_service import ContextualFallbackService
+from app.services.chat_response_mapper import agent_state_to_chat_response
 from app.services.product_service import (
     ProductAnswer,
     ProductAnswerService,
@@ -86,6 +90,9 @@ def _log_chat_response(
     *,
     history_turn_count: int = 0,
     history_loaded: bool = False,
+    agent_runtime: Literal["graph", "legacy"] = "legacy",
+    run_id: str | None = None,
+    completed_node_count: int | None = None,
 ) -> None:
     logger.info(
         "chat_response_completed",
@@ -94,6 +101,9 @@ def _log_chat_response(
             "message_length": len(message),
             "history_turn_count": history_turn_count,
             "history_loaded": history_loaded,
+            "agent_runtime": agent_runtime,
+            "run_id": run_id,
+            "completed_node_count": completed_node_count,
             "route": response.route,
             "intent": response.route,
             "qa_exact_hit": response.route == "faq",
@@ -175,6 +185,8 @@ class ChatService:
         message_repository: ChatConversationMessageRepository | None = None,
         fallback_service: ContextualFallbackService | None = None,
         semantic_product_resolver: SemanticProductResolver | None = None,
+        agent_runtime: AgentRuntime | None = None,
+        runtime_mode: Literal["graph", "legacy"] | None = None,
     ) -> None:
         self._rules = rule_registry or default_rule_registry()
         self._conversations = conversation_repository
@@ -187,6 +199,10 @@ class ChatService:
         self._messages = message_repository
         self._fallbacks = fallback_service or ContextualFallbackService()
         self._semantic_products = semantic_product_resolver or SemanticProductResolver()
+        self._agent_runtime = agent_runtime
+        self._runtime_mode = (
+            runtime_mode or ("graph" if agent_runtime is not None else "legacy")
+        )
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         if request.conversation_id is None:
@@ -205,13 +221,32 @@ class ChatService:
         try:
             await self._state_runtime.start(state)
             if self._messages is not None:
-                history = await self._messages.list_recent_turns(
-                    conversation_id, limit=10
-                )
                 await self._messages.append_customer_message(
                     conversation_id, request.message
                 )
-            response = await self._route_chat(request, state, history=history)
+            if self._runtime_mode == "graph":
+                if self._agent_runtime is None:
+                    raise ValueError("Graph runtime mode requires AgentRuntime")
+                if request.product_id:
+                    from app.agent.state import ProductReference
+
+                    state.turn.product.reference = ProductReference(
+                        product_id=request.product_id,
+                        source="customer_selected",
+                    )
+                    state.turn.product.resolution_source = "request"
+                state = await self._agent_runtime.invoke(state)
+                response = agent_state_to_chat_response(state)
+                history = [
+                    {"customer": item.customer, "assistant": item.assistant}
+                    for item in state.session.short_term_memory.recent_turns
+                ] if state.session is not None else []
+            else:
+                if self._messages is not None:
+                    history = await self._messages.list_recent_turns(
+                        conversation_id, limit=10
+                    )
+                response = await self._route_chat(request, state, history=history)
             await self._state_runtime.complete(state, response)
             if self._messages is not None:
                 await self._messages.append_assistant_message(
@@ -222,9 +257,20 @@ class ChatService:
                 response,
                 history_turn_count=len(history),
                 history_loaded=self._messages is not None,
+                agent_runtime=self._runtime_mode,
+                run_id=state.run_id,
+                completed_node_count=len(state.completed_nodes),
             )
             return response
         except Exception as exc:
+            if isinstance(exc, AgentGraphError):
+                if exc.failed_state is not None:
+                    state = exc.failed_state
+                await self._state_runtime.fail(state, exc)
+                original = exc.original_exception
+                if isinstance(original, AppException):
+                    raise original from exc
+                raise
             try:
                 await self._state_runtime.fail(state, exc)
             except Exception:
@@ -233,6 +279,7 @@ class ChatService:
                     extra={
                         "event": "chat_state_failure_checkpoint_failed",
                         "run_id": state.run_id,
+                        "failed_node": state.error.node if state.error else None,
                     },
                 )
             raise

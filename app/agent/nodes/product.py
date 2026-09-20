@@ -15,6 +15,7 @@ from app.agent.state import (
     StatePatch,
 )
 from app.core.exceptions import ProductServiceUnavailableError
+from app.core.exceptions import AppException, LLMInvocationError
 from app.services.product_resolver import (
     ConversationProductReference,
     ProductResolution,
@@ -378,11 +379,16 @@ class ProductAnswerNode:
         if turn is None or turn.product.context is None:
             raise ValueError("ProductAnswerNode 前必须加载商品事实")
         profile = ProductProfile.model_validate(turn.product.profile)
-        result: ProductAnswer = await self._capabilities.product_answers.answer(
-            turn.original_query,
-            profile,
-            conversation_id=state.conversation_id,
-        )
+        try:
+            result: ProductAnswer = await self._capabilities.product_answers.answer(
+                turn.original_query,
+                profile,
+                conversation_id=state.conversation_id,
+            )
+        except AppException:
+            raise
+        except Exception as exc:
+            raise LLMInvocationError() from exc
         context = turn.product.context
         return StatePatch(
             route="product",

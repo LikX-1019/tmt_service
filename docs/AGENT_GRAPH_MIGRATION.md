@@ -7,9 +7,10 @@ PHASE = Phase 2 — Unified Agent Graph Migration
 GRAPH_MIGRATION_FREEZE = active
 G0 = COMPLETED
 G1 = COMPLETED
-G2 = IN_PROGRESS
+G2 = COMPLETED
 G2A = COMPLETED
-G2B = NOT_STARTED
+G2B = COMPLETED
+G3 = NOT_STARTED
 PLAN_VERSION = 1
 BASELINE_DATE = 2026-09-20
 ```
@@ -25,11 +26,13 @@ BASELINE_DATE = 2026-09-20
 ```text
 /api/v1/chat
     ↓
-ChatService.chat()
+ChatService Facade
     ↓
-ChatService._route_chat()
+AgentRuntime
     ↓
-程序式 Rule / Social / Product / FAQ / RAG / Fallback 编排
+Unified Chat AgentGraph
+    ↓
+FAQ / Guard / Social / Product / Fallback Node 编排
 ```
 
 ```text
@@ -49,11 +52,13 @@ GitNexus 当前调用关系确认：
 | `ChatService._route_chat` | `ChatService.chat` | `chat`，8 traced process paths | LOW |
 | `ConsoleRuntime._evaluate_batch` | `ConsoleRuntime._evaluate_after_delay` → `ConsoleRuntime._on_message` | `_on_message`，7 traced process paths | LOW |
 
+After G2B, `_route_chat()` remains only as the temporary frozen rollback path for
+`UNIFIED_CHAT_RUNTIME=legacy`; it is no longer the default production caller.
+
 已有迁移基础包括 `AgentState`、`ChatSessionState`、`ChatTurnState`、`StatePatch`、
 `StateCoordinator`、`FileCheckpointStore`、`ChatStateRuntime` 和 PendingAction
 安全语义。G1 已引入 LangGraph，`AgentRuntime` 和最小可执行 StateGraph 骨架，
-拓扑为 START → session_hydrate → guard → response → END。生产 Unified Chat 与
-PDD 仍分别走 ChatService / ConsoleRuntime，Agent Graph 尚未接管任何生产流量。
+G2B 已将生产 Unified Chat 切到 Unified Chat AgentGraph；PDD 仍走 ConsoleRuntime。
 
 ## Target Architecture
 
@@ -154,7 +159,7 @@ G1 已完成，运行契约和验收证据见 `docs/AGENT_GRAPH_G1_RUNTIME.md`�
 
 | Item | Boundary |
 |---|---|
-| Status | `IN_PROGRESS` |
+| Status | `COMPLETED` |
 | Goal | `/api/v1/chat` 默认从 `ChatService` Facade 进入 AgentRuntime，不再由 `_route_chat()` 决策。 |
 | Scope | ChatService 请求适配、运行上下文创建、AgentRuntime invocation、ChatResponse 映射；迁移 Social、Intent、Product、FAQ、RAG、Fallback、Human、Response。 |
 | Prohibited | 静默改变 FAQ exact 与 Guard 的先后顺序；改变 API contract；重写 QA/Product 内部算法；绕过 StatePatch。 |
@@ -172,6 +177,18 @@ G2B — Unified Chat Production Cutover
 `G2A` builds and tests the complete equivalent Unified Chat decision graph without
 connecting production. `G2B` is the only phase allowed to make `ChatService`
 facade invoke `AgentRuntime`, with an explicit short-lived rollback switch.
+
+G2B cutover evidence lives in `docs/AGENT_GRAPH_G2B_CUTOVER.md`. Summary:
+
+* Production default is `UNIFIED_CHAT_RUNTIME=graph`.
+* `get_chat_service()` composes shared capabilities, the Unified Chat Graph, and
+  AgentRuntime before injecting them into ChatService.
+* Graph hydrates history and excludes the current customer turn from fallback history.
+* Customer is persisted before execution; assistant only after success.
+* The Graph-returned State is used for mapping, completion, logging, and checkpointing.
+* Graph failures preserve the actual failed node in the coarse checkpoint.
+* No automatic Graph-to-Legacy fallback exists.
+* Validation: agent 110, chat service 30, chat API 10, full suite 479 passed.
 
 ### Phase G3 — StatePatch + Node Checkpoint Integration
 

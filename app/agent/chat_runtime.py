@@ -285,6 +285,17 @@ class ChatStateRuntime:
         self._record_response(state, response)
         turn = _require_turn(state)
         session = _require_session(state)
+        if state.completed_nodes and state.completed_nodes[-1] == CHAT_TURN_NODE:
+            # Legacy mode owns the outer chat_turn node; preserve its completed trace.
+            outer_node = CHAT_TURN_NODE
+            graph_completed_nodes = state.completed_nodes[:-1]
+            graph_node_trace = state.node_trace[:-1]
+        else:
+            outer_node = CHAT_TURN_NODE
+            graph_completed_nodes = state.completed_nodes
+            graph_node_trace = state.node_trace
+        state.completed_nodes = [outer_node, *graph_completed_nodes]
+        state.node_trace = [*state.node_trace, *graph_node_trace]
         output_message = StateMessage(
             role="assistant",
             content=response.answer,
@@ -316,7 +327,23 @@ class ChatStateRuntime:
     async def fail(self, state: AgentState, error: Exception) -> None:
         error_code = type(error).__name__.upper()
         turn = _require_turn(state)
-        turn.fallback_reason = "chat_processing_failed"
+        graph_failure = (
+            state.error is not None
+            and state.current_node is None
+            and state.error.node != CHAT_TURN_NODE
+        )
+        if graph_failure:
+            turn.fallback_reason = state.error.code
+            state.sync_contract_state()
+        else:
+            turn.fallback_reason = "chat_processing_failed"
+        if graph_failure:
+            if self._store is not None:
+                await self._store.save(
+                    state,
+                    reason=f"failed:{state.error.node}",
+                )
+            return
         if state.current_node == CHAT_TURN_NODE:
             state.fail_node(
                 CHAT_TURN_NODE,

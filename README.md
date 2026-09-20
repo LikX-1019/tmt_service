@@ -20,20 +20,15 @@ POST /api/v1/chat
         ↓
 ChatService
         ↓
-Rule Engine
+AgentRuntime
         ↓
-Terminal Rule?
-  ├── Yes → fixed reply / human route
-  └── No
+Unified Chat AgentGraph
         ↓
-Product Resolution
-  ├── Product Answer
-  └── No Product
-        ↓
-QAService
-        ↓
-FAQ / RAG / fallback
+FAQ / Guard / Social / Product / RAG / Fallback
 ```
+
+`UNIFIED_CHAT_RUNTIME=graph` 是生产默认值。`legacy` 只是临时紧急回滚开关，
+冻结且不新增业务能力，计划在迁移 Phase G6 移除。
 
 `POST /api/v1/qa` 仍是独立知识问答接口，供 QA/RAG 调试和兼容调用使用；它不是
 Customer Demo 的默认主链路。

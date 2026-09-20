@@ -66,6 +66,10 @@ class SessionHydrateNode:
                 state.conversation_id,
                 limit=session.short_term_memory.max_recent_messages,
             )
+            if history and history[-1].get("assistant") is None:
+                last_customer = history[-1].get("customer")
+                if last_customer == turn.original_query:
+                    history = history[:-1]
             recent_turns = [
                 RecentTurnState(
                     customer=item.get("customer"),

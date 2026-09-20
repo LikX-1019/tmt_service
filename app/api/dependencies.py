@@ -9,6 +9,9 @@ from fastapi import Request
 
 from app.agent.chat_runtime import ChatStateRuntime
 from app.agent.checkpoint import FileCheckpointStore
+from app.agent.dependencies import AgentCapabilities
+from app.agent.graph import build_unified_chat_graph
+from app.agent.runtime import AgentRuntime
 from app.core.config import get_settings
 from app.database.session import get_session_factory
 from app.core.exceptions import ConsoleUnavailableError
@@ -21,13 +24,18 @@ from app.rag.retrieval.bm25_retriever import BM25Retriever
 from app.rag.retrieval.dense_retriever import DenseRetriever
 from app.rag.retrieval.hybrid_retriever import HybridRetriever
 from app.rag.retrieval.reranker import BGEReranker
+from app.rules.registry import default_rule_registry
 from app.repositories.chat_message_repository import ChatConversationMessageRepository
 from app.repositories.conversation_repository import ConversationProductRepository
 from app.repositories.product_repository import ProductRepository
 from app.services.chat_service import ChatService
 from app.services.contextual_fallback_service import ContextualFallbackService
 from app.services.console_runtime import ConsoleRuntime
+from app.services.product_resolver import ProductResolver
+from app.services.product_service import ProductAnswerService
+from app.services.semantic_product_resolver import SemanticProductResolver
 from app.services.shop_runtime_manager import ShopRuntimeManager
+from app.services.social_router import SocialRouter
 
 _qa_service: QAService | None = None
 _qa_service_lock = asyncio.Lock()
@@ -36,13 +44,35 @@ _qa_service_lock = asyncio.Lock()
 @lru_cache(maxsize=1)
 def get_chat_service() -> ChatService:
     """返回统一后端聊天路由；懒加载商品、会话和 QA 依赖。"""
+    conversations = ConversationProductRepository(get_session_factory())
+    messages = ChatConversationMessageRepository(get_session_factory())
+    products = ProductRepository()
+    fallback_service = ContextualFallbackService()
+    rules = default_rule_registry()
+    social_router = SocialRouter()
+    product_resolver = ProductResolver()
+    semantic_products = SemanticProductResolver()
+    capabilities = AgentCapabilities(
+        rules=rules,
+        social_router=social_router,
+        product_resolver=product_resolver,
+        semantic_products=semantic_products,
+        product_answers=ProductAnswerService(),
+        fallbacks=fallback_service,
+        qa_provider=get_qa_service,
+        conversations=conversations,
+        messages=messages,
+        products=products,
+    )
     return ChatService(
-        conversation_repository=ConversationProductRepository(get_session_factory()),
-        message_repository=ChatConversationMessageRepository(get_session_factory()),
-        product_repository=ProductRepository(),
-        fallback_service=ContextualFallbackService(),
+        conversation_repository=conversations,
+        message_repository=messages,
+        product_repository=products,
+        fallback_service=fallback_service,
         qa_provider=get_qa_service,
         state_runtime=ChatStateRuntime(FileCheckpointStore()),
+        agent_runtime=AgentRuntime(build_unified_chat_graph(capabilities)),
+        runtime_mode=get_settings().unified_chat_runtime,
     )
 
 
