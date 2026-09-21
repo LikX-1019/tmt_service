@@ -197,7 +197,6 @@ def test_successful_greeting_persist_exact_reason_sequence(tmp_path):
     assert result.status is WorkflowStatus.COMPLETED
     assert result.completed_nodes == [
         "session_hydrate",
-        "faq_exact",
         "guard",
         "response",
     ]
@@ -205,8 +204,6 @@ def test_successful_greeting_persist_exact_reason_sequence(tmp_path):
         "workflow_created",
         "before:session_hydrate",
         "after:session_hydrate",
-        "before:faq_exact",
-        "after:faq_exact",
         "before:guard",
         "after:guard",
         "before:response",
@@ -226,8 +223,8 @@ def test_successful_product_path_has_before_and_after_for_every_node(tmp_path):
 
     expected = [
         "session_hydrate",
-        "faq_exact",
         "guard",
+        "faq_exact",
         "social",
         "product_resolve",
         "product_load",
@@ -248,6 +245,7 @@ def test_faq_exact_early_return_does_not_checkpoint_later_nodes(tmp_path):
 
     assert result.completed_nodes == [
         "session_hydrate",
+        "guard",
         "faq_exact",
         "response",
     ]
@@ -437,7 +435,7 @@ def test_after_checkpoint_state_round_trips_json(tmp_path):
 
 @pytest.mark.parametrize(
     ("hit", "expected"),
-    [(True, "response"), (False, "guard")],
+    [(True, "response"), (False, "social")],
 )
 def test_faq_next_node_matches_conditional_edge(hit, expected):
     from app.agent.edges.faq_edge import after_faq
@@ -456,7 +454,7 @@ def test_faq_next_node_matches_conditional_edge(hit, expected):
 
 @pytest.mark.parametrize(
     ("terminal", "expected"),
-    [(True, "response"), (False, "social")],
+    [(True, "response"), (False, "faq_exact")],
 )
 def test_guard_next_node_matches_conditional_edge(terminal, expected):
     from app.agent.edges.guard_edge import after_guard
@@ -484,7 +482,7 @@ def test_guard_next_node_matches_conditional_edge(terminal, expected):
     state_obj = state("message")
     state_obj.apply_patch(patch)
 
-    assert patch.next_node == ("response" if terminal else "social")
+    assert patch.next_node == ("response" if terminal else "faq_exact")
     assert after_guard(state_obj) == expected
 
 

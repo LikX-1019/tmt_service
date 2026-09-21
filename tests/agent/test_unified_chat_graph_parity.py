@@ -109,6 +109,22 @@ class FakeProductAnswers:
         )
 
 
+class FixedSocialRouter:
+    def __init__(self):
+        from app.services.social_router import SocialDecision
+
+        self.decision = SocialDecision(
+            intent="small_talk",
+            response="social answer",
+            reason_code="social_affection",
+            source="rule",
+            confidence=1.0,
+        )
+
+    async def classify(self, message):
+        return self.decision
+
+
 class FakeFallback(ContextualFallbackService):
     def __init__(self, answer="fallback answer", needs_human=False, fail=False, confidence=0.5):
         super().__init__(llm=object())
@@ -194,6 +210,7 @@ def capabilities(
     semantic=None,
     answers=None,
     fallbacks=None,
+    social_router=None,
 ):
     qa = qa or FakeQA()
     product_profile = product()
@@ -215,7 +232,7 @@ def capabilities(
     def graph_capabilities(conversations):
         return AgentCapabilities(
             rules=default_rule_registry(),
-            social_router=SocialRouter(),
+            social_router=social_router or SocialRouter(),
             product_resolver=ProductResolver(),
             semantic_products=semantic,
             product_answers=answers,
@@ -237,7 +254,7 @@ def capabilities(
     )
     direct_caps = AgentCapabilities(
         rules=default_rule_registry(),
-        social_router=SocialRouter(),
+        social_router=social_router or SocialRouter(),
         product_resolver=ProductResolver(),
         semantic_products=semantic,
         product_answers=answers,
@@ -298,30 +315,44 @@ def core_fields(response):
 
 
 @pytest.mark.asyncio
-async def test_faq_exact_hit_has_legacy_parity():
+async def test_faq_exact_hit_runs_after_guard():
     from app.qa.models import QAResult
 
     qa_result = QAResult(answer="faq answer", route="faq", confidence=1.0, sources=[])
-    legacy, graph, _, _, graph_result = await run_both(
-        "how to use", qa=FakeQA(exact=qa_result)
-    )
+    qa = FakeQA(exact=qa_result)
+    legacy, graph, _, _, graph_result = await run_both("how to use", qa=qa)
     assert core_fields(legacy) == core_fields(graph)
     assert graph_result.turn.reply.source == "qa"
+    assert graph_result.context["faq_hit"] is True
+    assert graph_result.completed_nodes == [
+        "session_hydrate",
+        "guard",
+        "faq_exact",
+        "response",
+    ]
+    assert qa.exact_kwargs is not None
 
 
 @pytest.mark.asyncio
-async def test_faq_exact_beats_guard_is_frozen_legacy_compatibility_debt():
+async def test_guard_prevents_faq_exact_override_for_high_risk():
     from app.qa.models import QAResult
 
     qa_result = QAResult(answer="faq refund", route="faq", confidence=1.0)
-    legacy, graph, _, _, state = await run_both(
-        "我要退款", qa=FakeQA(exact=qa_result)
-    )
-    assert core_fields(legacy) == core_fields(graph)
-    assert state.context["faq_hit"] is True
-    assert state.completed_nodes[1] == "faq_exact"
-    assert state.completed_nodes[2] == "response"
-
+    qa = FakeQA(exact=qa_result)
+    _, graph, _, _, state = await run_both("我要退款", qa=qa)
+    assert graph.route == "human"
+    assert graph.source == "rule"
+    assert state.turn.reply.source == "rule"
+    assert state.session is not None and state.session.human.required is True
+    assert state.completed_nodes == [
+        "session_hydrate",
+        "guard",
+        "human_transfer",
+        "response",
+    ]
+    assert "faq_exact" not in state.completed_nodes
+    assert "faq_hit" not in state.context
+    assert qa.exact_kwargs is None
 
 @pytest.mark.parametrize(
     ("message", "expected_route", "expected_source"),
@@ -350,7 +381,9 @@ async def test_refund_policy_question_continues_to_fallback():
 
 @pytest.mark.asyncio
 async def test_social_expression_uses_social_node_and_response():
-    legacy, graph, _, _, state = await run_both("很开心认识你")
+    legacy, graph, _, _, state = await run_both(
+        "很开心认识你", social_router=FixedSocialRouter()
+    )
     assert core_fields(legacy) == core_fields(graph)
     assert state.completed_nodes[3] == "social"
     assert state.context["social_hit"] is True

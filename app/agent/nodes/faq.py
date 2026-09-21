@@ -20,13 +20,13 @@ class FAQNode:
         if self._capabilities.qa_provider is None:
             return StatePatch(
                 context={"faq_hit": False},
-                next_node="pdd_intent" if session.channel == "pdd" else "guard",
+                next_node="pdd_intent" if session.channel == "pdd" else "social",
             )
         qa_service = await self._capabilities.qa_provider()
         if qa_service is None:
             return StatePatch(
                 context={"faq_hit": False},
-                next_node="pdd_intent" if session.channel == "pdd" else "guard",
+                next_node="pdd_intent" if session.channel == "pdd" else "social",
             )
         match_kwargs = {
             "product_code": (
@@ -58,7 +58,7 @@ class FAQNode:
         if result is None:
             return StatePatch(
                 context={"faq_hit": False},
-                next_node="pdd_intent" if session.channel == "pdd" else "guard",
+                next_node="pdd_intent" if session.channel == "pdd" else "social",
             )
         return qa_result_to_patch(result, next_node="response")
 

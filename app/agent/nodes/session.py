@@ -90,7 +90,7 @@ class SessionHydrateNode:
             context={"session_hydrated": True},
             recent_turns=recent_turns,
             next_node=(
-                "pdd_handoff" if session.channel == "pdd" else "faq_exact"
+                "pdd_handoff" if session.channel == "pdd" else "guard"
             ),
         )
         if binding is not None and binding.product_id:

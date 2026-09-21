@@ -184,7 +184,7 @@ def build_unified_chat_graph(
         lambda state: "pdd" if state.session.channel == "pdd" else "unified",
         {
             "pdd": PDD_HANDOFF_NODE,
-            "unified": FAQ_EXACT_NODE,
+            "unified": GUARD_NODE,
         },
     )
     builder.add_conditional_edges(
@@ -214,7 +214,7 @@ def build_unified_chat_graph(
         {
             RESPONSE_NODE: RESPONSE_NODE,
             PDD_INTENT_NODE: PDD_INTENT_NODE,
-            GUARD_NODE: GUARD_NODE,
+            SOCIAL_NODE: SOCIAL_NODE,
         },
     )
     builder.add_conditional_edges(
@@ -223,6 +223,7 @@ def build_unified_chat_graph(
         {
             HUMAN_TRANSFER_NODE: HUMAN_TRANSFER_NODE,
             RESPONSE_NODE: RESPONSE_NODE,
+            FAQ_EXACT_NODE: FAQ_EXACT_NODE,
             SOCIAL_NODE: SOCIAL_NODE,
         },
     )

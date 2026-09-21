@@ -290,7 +290,7 @@ G6 legacy removal evidence lives in `docs/AGENT_GRAPH_G6_LEGACY_REMOVAL.md`. Sum
 
 | Item | Boundary |
 |---|---|
-| Status | `NOT_STARTED` |
+| Status | `COMPLETED` |
 | Goal | 清理命名、注释、死代码、配置和文档，使实现与目标架构一致。 |
 | Scope | Agent 目录结构、Runtime 接口、Graph 文档、logging/debug contract、repository/service boundary；可运行完整测试。 |
 | Prohibited | 引入新业务能力；重构 LLM 策略；改变状态契约。 |
@@ -307,6 +307,13 @@ G7 cleanup evidence lives in `docs/AGENT_GRAPH_G7_CLEANUP.md`. Summary:
 * Renamed remaining transition identifiers without changing runtime behavior.
 * Synchronized current architecture documentation.
 * Preserved SendWorker, `_send_job`, AutoReplyPolicy, persistence, outbound, and checkpoint semantics.
+
+Post-G7 acceptance-blocker fix: Unified Chat now runs `session_hydrate → guard → faq_exact`
+before social/product/RAG/fallback paths. A high-risk terminal Guard decision therefore cannot be
+overridden by an FAQ exact answer, and FAQ miss continues to social. The prior FAQ Exact → Guard
+compatibility debt is resolved. PDD keeps its existing safe channel topology
+(`session_hydrate → pdd_handoff → pdd_greeting → social → faq/intent`). This fix does not start or
+complete G8 and Freeze remains active.
 
 ### Phase G8 — Migration Acceptance
 

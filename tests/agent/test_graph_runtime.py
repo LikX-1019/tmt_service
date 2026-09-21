@@ -76,8 +76,8 @@ async def test_agent_runtime_invokes_graph_async_and_returns_agent_state() -> No
     assert result.status is WorkflowStatus.COMPLETED
     assert result.completed_nodes == [
         "session_hydrate",
-        "faq_exact",
         "guard",
+        "faq_exact",
         "social",
         "product_resolve",
         "rag_context",
@@ -108,7 +108,7 @@ async def test_business_nodes_return_state_patch() -> None:
     assert isinstance(hydrate_patch, StatePatch)
     assert isinstance(guard_patch, StatePatch)
     assert isinstance(response_patch, StatePatch)
-    assert hydrate_patch.next_node == "faq_exact"
+    assert hydrate_patch.next_node == "guard"
     assert response_patch.next_node is None
 
 
@@ -153,7 +153,7 @@ async def test_guard_continue_reaches_skeleton_response() -> None:
 async def test_after_guard_returns_registered_route_keys(message: str) -> None:
     """条件边是纯函数，human/terminal/continue 目标必须已注册。"""
     state = await _hydrated_guard_state(message)
-    expected = "human_transfer" if message == "我要人工" else "social"
+    expected = "human_transfer" if message == "我要人工" else "faq_exact"
 
     assert after_guard(state) == expected
 
