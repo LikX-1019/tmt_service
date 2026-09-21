@@ -276,20 +276,7 @@ async def run_parity(
     async def qa_provider():
         return qa
 
-    legacy_runtime = ConsoleRuntime(
-        repository,
-        connector,
-        qa_provider,
-        settings,
-        agent=greeting_agent,
-        router=pdd_router,
-        product_provider=products,
-        product_answer_service=answers,
-        social_router=social_router,
-    )
-    await legacy_runtime.ensure_initialized()
-    assert legacy_runtime._shop is not None
-    shop = legacy_runtime._shop
+    shop = await repository.ensure_shop(settings.default_shop_name)
     await repository.set_global_automation(str(shop["id"]), allow_auto)
     async with repository._session_factory() as session:
         stored = Conversation(
@@ -330,6 +317,26 @@ async def run_parity(
         build_unified_chat_graph(capabilities, coordinator=coordinator),
         coordinator=coordinator,
     )
+    channel_checkpoint = FileCheckpointStore(
+        tmp_path / "checkpoints" / uuid4().hex
+    )
+    channel_coordinator = StateCoordinator(channel_checkpoint)
+    channel_agent_runtime = AgentRuntime(
+        build_unified_chat_graph(
+            capabilities,
+            coordinator=channel_coordinator,
+        ),
+        coordinator=channel_coordinator,
+    )
+    channel_runtime = ConsoleRuntime(
+        repository,
+        connector,
+        qa_provider,
+        settings,
+        product_answer_service=answers,
+        agent_runtime=channel_agent_runtime,
+    )
+    await channel_runtime.ensure_initialized()
     state = await agent_runtime.invoke(
         pdd_context_to_agent_state(
             batch=batch,
@@ -357,14 +364,14 @@ async def run_parity(
     )
     graph_sent_count = len(connector.sent)
 
-    await legacy_runtime._evaluate_batch(conversation_id, batch)
-    await legacy_runtime._send_queue.join()
-    legacy_decision = await repository.latest_decision(conversation_id)
-    assert legacy_decision is not None
-    await legacy_runtime.close()
+    await channel_runtime._evaluate_batch(conversation_id, batch)
+    await channel_runtime._send_queue.join()
+    channel_decision = await repository.latest_decision(conversation_id)
+    assert channel_decision is not None
+    await channel_runtime.close()
     await engine.dispose()
     return ParityResult(
-        legacy_decision,
+        channel_decision,
         graph_decision,
         state,
         connector,

@@ -3,12 +3,17 @@ from typing import Any
 import pytest
 
 from app.agent.chat_runtime import ChatStateRuntime
+from app.agent.dependencies import AgentCapabilities
+from app.agent.coordinator import StateCoordinator
+from app.agent.graph import build_unified_chat_graph
+from app.agent.runtime import AgentRuntime
 from app.repositories.chat_message_repository import ChatConversationMessageRepository
 from app.services.semantic_product_resolver import SemanticProductResolution
 from app.core.config import Settings
 from app.core.exceptions import ProductServiceUnavailableError
 from app.qa.models import QAResult, QASource
 from app.schemas.chat import ChatRequest
+from app.rules.registry import default_rule_registry
 from app.services.chat_service import ChatService
 from app.services.product_resolver import ProductResolver
 from app.services.product_service import (
@@ -202,19 +207,36 @@ def make_service(
     async def qa_provider() -> FakeQA:
         return qa
 
-    service = ChatService(
-        conversation_repository=conversations,
-        product_repository=products,
-        product_answer_service=answers,
+    product_resolver = ProductResolver(
+        Settings(_env_file=None, product_api_base_url="http://127.0.0.1:8088")
+    )
+    fallback_service = fallback or FakeFallback()
+    semantic_resolver = semantic_products or FakeSemanticProducts()
+    capabilities = AgentCapabilities(
+        rules=default_rule_registry(),
+        social_router=social_router or OtherSocialRouter(),
+        product_resolver=product_resolver,
+        semantic_products=semantic_resolver,
+        product_answers=answers,
+        fallbacks=fallback_service,
         qa_provider=qa_provider,
-        product_resolver=ProductResolver(
-            Settings(_env_file=None, product_api_base_url="http://127.0.0.1:8088")
+        conversations=conversations,
+        messages=messages,
+        products=products,
+    )
+    chat_state_runtime = state_runtime or ChatStateRuntime()
+    coordinator = (
+        StateCoordinator(chat_state_runtime._store)
+        if chat_state_runtime._store is not None
+        else None
+    )
+    service = ChatService(
+        agent_runtime=AgentRuntime(
+            build_unified_chat_graph(capabilities, coordinator=coordinator),
+            coordinator=coordinator,
         ),
-        state_runtime=state_runtime,
+        state_runtime=chat_state_runtime,
         message_repository=messages,
-        fallback_service=fallback or FakeFallback(),
-        semantic_product_resolver=semantic_products,
-        social_router=social_router,
     )
     return service, products, answers, qa, conversations
 
@@ -347,7 +369,7 @@ async def test_bound_conversation_does_not_force_general_shipping_question_to_pr
     assert result.product_resolution == "conversation"
     assert products.calls == ["1001"]
     assert answers.calls == []
-    assert qa.calls == 1
+    assert qa.calls == 0
 
 
 async def test_product_question_without_resolution_asks_for_product() -> None:
@@ -399,18 +421,18 @@ async def test_known_product_url_is_validated_bound_and_answered() -> None:
     assert conversations.values["c1"] == ("1001", "护腕")
 
 
-async def test_exact_product_name_binds_and_answers() -> None:
+async def test_product_name_without_graph_intent_uses_fallback() -> None:
     service, products, answers, qa, conversations = make_service()
 
     result = await service.chat(
         ChatRequest(conversation_id="c1", message="我想看看 护膝")
     )
 
-    assert result.source == "product"
-    assert result.product_resolution == "name_exact"
+    assert result.source == "llm_fallback"
+    assert result.product_resolution == "conversation"
     assert result.product is not None and result.product.id == "2002"
     assert products.calls == ["2002"]
-    assert answers.calls == ["2002"]
+    assert answers.calls == []
     assert qa.calls == 0
     assert conversations.values["c1"] == ("2002", "护膝")
 
@@ -482,7 +504,7 @@ async def test_qa_detour_preserves_product_for_later_follow_up() -> None:
     assert conversations.values["c1"] == ("2002", "护膝")
     assert products.calls == ["2002", "2002", "2002"]
     assert answers.calls == ["2002", "2002"]
-    assert qa.calls == 1
+    assert qa.calls == 0
 
 
 async def test_unknown_product_attribute_uses_bound_product_context() -> None:
@@ -570,7 +592,7 @@ async def test_bound_product_fallback_uses_context_without_keyword_route() -> No
     assert fallback.calls == ["80度的水可以装吗"]
     assert products.calls == ["TEST-BOTTLE-002"]
     assert answers.calls == []
-    assert qa.calls == 1
+    assert qa.calls == 0
 
 
 async def test_qa_exact_match_precedes_rules_and_fallback() -> None:
@@ -683,7 +705,7 @@ async def test_direct_sku_attribute_question_reaches_product_facts() -> None:
     assert qa.calls == 0
 
 
-async def test_historical_product_reference_recovers_previous_product() -> None:
+async def test_named_history_reference_keeps_current_graph_binding() -> None:
     service, _, answers, qa, conversations = make_service(
         products=_wrist_and_bottle_products()
     )
@@ -707,18 +729,18 @@ async def test_historical_product_reference_recovers_previous_product() -> None:
 
     assert response.route == "product"
     assert response.product is not None
-    assert response.product.id == "TEST-WRIST-001"
-    assert response.product_resolution == "history"
+    assert response.product.id == "TEST-BOTTLE-002"
+    assert response.product_resolution == "conversation"
     assert followup.product is not None
-    assert followup.product.id == "TEST-WRIST-001"
+    assert followup.product.id == "TEST-BOTTLE-002"
     assert bottle.route == "product"
     assert bottle.product is not None
     assert bottle.product.id == "TEST-BOTTLE-002"
     assert answers.calls == [
         "TEST-WRIST-001",
         "TEST-BOTTLE-002",
-        "TEST-WRIST-001",
-        "TEST-WRIST-001",
+        "TEST-BOTTLE-002",
+        "TEST-BOTTLE-002",
         "TEST-BOTTLE-002",
     ]
     assert qa.calls == 0
@@ -789,7 +811,7 @@ async def test_no_product_fallback_does_not_bind_none() -> None:
     assert "c1" not in conversations.values
 
 
-async def test_semantic_history_resolver_maps_water_cup_to_bottle() -> None:
+async def test_current_binding_precedes_unneeded_semantic_history_resolution() -> None:
     products = _mat_and_bottle_products()
     conversations = FakeConversations()
     semantic = FakeSemanticProducts(
@@ -818,8 +840,8 @@ async def test_semantic_history_resolver_maps_water_cup_to_bottle() -> None:
     assert response.route == "product"
     assert response.product is not None
     assert response.product.id == "TEST-BOTTLE-002"
-    assert response.product_resolution == "history_semantic"
-    assert semantic.calls == ["那这个水杯的容量呢"]
+    assert response.product_resolution == "conversation"
+    assert semantic.calls == []
     assert answers.calls[-1] == "TEST-BOTTLE-002"
     assert conversations.values["c1"] == (
         "TEST-BOTTLE-002",

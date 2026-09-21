@@ -15,6 +15,7 @@ G4 = COMPLETED
 G5 = COMPLETED
 G5A = COMPLETED
 G5B = COMPLETED
+G6 = COMPLETED
 PLAN_VERSION = 1
 BASELINE_DATE = 2026-09-20
 ```
@@ -46,28 +47,28 @@ PDD BrowserMessage
     ↓
 ConsoleRuntime._on_message()
     ↓
-ConsoleRuntime._evaluate_batch()  [Graph default; legacy rollback only]
+ConsoleRuntime._evaluate_batch()  [thin Graph invocation]
     ↓
 PDD Channel Adapter → AgentRuntime → shared AgentGraph
     ↓
 ConsoleRuntime channel policy / persistence / send queue
 ```
 
-GitNexus 当前调用关系确认：
+GitNexus G6 前调用关系与删除结果：
 
-| Legacy orchestrator | Upstream caller | Affected process | Risk |
-|---|---|---|---|
-| `ChatService._route_chat` | `ChatService.chat` | `chat`，8 traced process paths | LOW |
-| `ConsoleRuntime._evaluate_batch` | `ConsoleRuntime._evaluate_after_delay` → `ConsoleRuntime._on_message` | `_on_message`，7 traced process paths | LOW |
+| Legacy orchestrator | Former upstream caller | Affected process | Pre-removal risk | G6 result |
+|---|---|---|---|---|
+| `ChatService._route_chat` | `ChatService.chat` | `chat`，8 traced process paths | LOW | Deleted |
+| `ConsoleRuntime._evaluate_batch_legacy` | `ConsoleRuntime._evaluate_batch` → `ConsoleRuntime._evaluate_after_delay` → `ConsoleRuntime._on_message` | `_on_message`，7 traced process paths | LOW | Deleted |
 
-After G2B, `_route_chat()` remains only as the temporary frozen rollback path for
-`UNIFIED_CHAT_RUNTIME=legacy`; it is no longer the default production caller.
+G6 removed `_route_chat()`, `_evaluate_batch_legacy()`, `UNIFIED_CHAT_RUNTIME`,
+and `PDD_AGENT_RUNTIME`. There is no configurable or hidden Legacy AI path.
 
 已有迁移基础包括 `AgentState`、`ChatSessionState`、`ChatTurnState`、`StatePatch`、
 `StateCoordinator`、`FileCheckpointStore`、`ChatStateRuntime` 和 PendingAction
 安全语义。G1 已引入 LangGraph，`AgentRuntime` 和最小可执行 StateGraph 骨架，
 G2B 已将生产 Unified Chat 切到 Unified Chat AgentGraph；G5B 已将 PDD 默认路径切到同一套
-AgentRuntime/AgentGraph，legacy 仅保留为 G6 前的显式回滚开关。
+AgentRuntime/AgentGraph；G6 已删除两条 Legacy 回滚路径。
 
 ## Target Architecture
 
@@ -257,22 +258,32 @@ status, and human-takeover persistence remain outside the Graph.
 
 G5B completed the controlled production adapter cutover. `ShopRuntimeManager` composes
 one durable PDD `AgentRuntime`/shared business Graph and explicitly injects it into
-each `ConsoleRuntime`. The default is `PDD_AGENT_RUNTIME=graph`; `legacy` is an
-explicit emergency rollback only. Graph exceptions become a suggest-only decision and
-never invoke the Legacy AI path. See `docs/AGENT_GRAPH_G5B_CUTOVER.md` for the
-implementation and validation evidence.
+each `ConsoleRuntime`. At G5B the default was `PDD_AGENT_RUNTIME=graph` with an
+explicit emergency rollback; G6 subsequently removed that switch. Graph exceptions
+become a suggest-only decision and never invoke the Legacy AI path. See
+`docs/AGENT_GRAPH_G5B_CUTOVER.md` for the implementation and validation evidence.
 
 ### Phase G6 — Remove Duplicate Orchestration
 
 | Item | Boundary |
 |---|---|
-| Status | `NOT_STARTED` |
+| Status | `COMPLETED` |
 | Goal | 删除或降级重复业务编排，消除 Graph 与 Legacy 双路径。 |
 | Scope | `_route_chat()` 和 `_evaluate_batch()` 的业务分支、已废弃 wrapper、无用 routing helper、重复 decision mapping。 |
 | Prohibited | 删除回归基线；保留可独立运行的隐藏 legacy path；改变已验收外部行为。 |
 | Tests | 删除后执行 Unified Chat、PDD、State、API、rules、QA 回归；检查确认没有第二条业务决策入口。 |
 | Acceptance | ChatService/ConsoleRuntime 只保留薄适配层或渠道职责，Graph 是唯一业务决策入口。 |
 | Rollback | 通过 Git revert 恢复，不保留长期 switch。 |
+
+G6 legacy removal evidence lives in `docs/AGENT_GRAPH_G6_LEGACY_REMOVAL.md`. Summary:
+
+* Deleted `ChatService._route_chat()` and `ConsoleRuntime._evaluate_batch_legacy()`.
+* Deleted `UNIFIED_CHAT_RUNTIME` and `PDD_AGENT_RUNTIME`.
+* Unified Chat and PDD now have only the `AgentRuntime → AgentGraph` business path.
+* SendWorker, `_send_job`, AutoReplyPolicy, persistence, and outbound responsibilities
+  remain outside the Graph.
+* Historical `chat_turn` checkpoints remain readable and safely resolve to manual state.
+* Rollback is now a Git revert rather than a runtime switch.
 
 ### Phase G7 — Architecture Cleanup + Full Regression
 

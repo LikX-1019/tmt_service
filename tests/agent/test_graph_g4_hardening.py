@@ -92,7 +92,7 @@ class FailingAnswers:
 def graph_state(message: str) -> AgentState:
     from app.agent.chat_runtime import ChatStateRuntime
 
-    return ChatStateRuntime(lifecycle_mode="graph").create_state(
+    return ChatStateRuntime().create_state(
         message=message,
         conversation_id=f"c-{message}",
         customer_id="u1",
@@ -190,7 +190,7 @@ async def test_fallback_failure_resume_does_not_repeat_rag(tmp_path):
         coordinator=coordinator,
     )
     runtime = AgentRuntime(graph, coordinator=coordinator)
-    initial = ChatStateRuntime(lifecycle_mode="graph").create_state(
+    initial = ChatStateRuntime().create_state(
         message="unknown question",
         conversation_id="resume",
         customer_id="u1",
@@ -268,7 +268,7 @@ async def test_product_missing_returns_contract_without_exception(tmp_path):
         make_capabilities(RAGCounter(), answers=None, products=EmptyProducts())
     )
     runtime = AgentRuntime(graph, coordinator=coordinator)
-    state = ChatStateRuntime(lifecycle_mode="graph").create_state(
+    state = ChatStateRuntime().create_state(
         message="这个怎么用",
         conversation_id="missing",
         customer_id="u1",
@@ -350,7 +350,7 @@ async def test_core_product_routing_works_without_magic_context_keys(tmp_path):
         make_capabilities(RAGCounter(), answers=Answers(), products=Products())
     )
     runtime = AgentRuntime(graph, coordinator=coordinator)
-    state = ChatStateRuntime(lifecycle_mode="graph").create_state(
+    state = ChatStateRuntime().create_state(
         message="question",
         conversation_id="typed-product",
         customer_id="u1",

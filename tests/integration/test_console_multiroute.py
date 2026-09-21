@@ -18,6 +18,7 @@ from app.qa.models import QAResult, RetrievalDocument
 from app.repositories.console_repository import ConsoleRepository
 from app.services.console_runtime import ConsoleRuntime
 from app.services.product_service import ProductAnswer, ProductProfile
+from tests.integration.console_graph import build_console_graph_runtime
 
 
 class ReadyConnector(CustomerServiceConnector):
@@ -65,9 +66,14 @@ class StubProductProvider:
         self.calls += 1
         return ProductProfile(id=product_id, name="护腕", summary="日常佩戴支撑")
 
+    async def get_product_by_id(self, product_id: str) -> ProductProfile:
+        return await self.get_product(product_id)
+
 
 class StubProductAnswerService:
-    async def answer(self, _query: str, _product: ProductProfile) -> ProductAnswer:
+    async def answer(
+        self, _query: str, _product: ProductProfile, **_kwargs
+    ) -> ProductAnswer:
         return ProductAnswer(
             answer="这款适合日常佩戴。",
             facts_supported=True,
@@ -106,15 +112,24 @@ async def test_product_path_auto_sends_only_after_exact_qa_miss() -> None:
     async def qa_provider():
         return qa
 
+    settings = Settings(_env_file=None)
+    product_provider = StubProductProvider()
+    product_answers = StubProductAnswerService()
     runtime = ConsoleRuntime(
         repository,
         connector,
         qa_provider,
-        Settings(_env_file=None),
-        agent=OtherAgent(),
-        router=CustomerServiceRouter(),
-        product_provider=StubProductProvider(),
-        product_answer_service=StubProductAnswerService(),
+        settings,
+        product_answer_service=product_answers,
+        agent_runtime=build_console_graph_runtime(
+            repository,
+            qa_provider,
+            settings,
+            agent=OtherAgent(),
+            router=CustomerServiceRouter(),
+            product_provider=product_provider,
+            product_answer_service=product_answers,
+        ),
     )
     try:
         await runtime.ensure_initialized()
@@ -170,7 +185,16 @@ async def test_handoff_precedes_faq_and_keeps_conversation_manual() -> None:
     async def qa_provider():
         return StubQA(faq)
 
-    runtime = ConsoleRuntime(repository, connector, qa_provider, Settings(_env_file=None), agent=OtherAgent())
+    settings = Settings(_env_file=None)
+    runtime = ConsoleRuntime(
+        repository,
+        connector,
+        qa_provider,
+        settings,
+        agent_runtime=build_console_graph_runtime(
+            repository, qa_provider, settings, agent=OtherAgent()
+        ),
+    )
     try:
         await runtime.ensure_initialized()
         shop = await repository.ensure_shop("测试店铺")
@@ -233,13 +257,19 @@ async def test_exact_faq_prevents_product_and_rag_paths() -> None:
     async def qa_provider():
         return qa
 
+    settings = Settings(_env_file=None)
     runtime = ConsoleRuntime(
         repository,
         connector,
         qa_provider,
-        Settings(_env_file=None),
-        agent=OtherAgent(),
-        product_provider=provider,
+        settings,
+        agent_runtime=build_console_graph_runtime(
+            repository,
+            qa_provider,
+            settings,
+            agent=OtherAgent(),
+            product_provider=provider,
+        ),
     )
     try:
         await runtime.ensure_initialized()
@@ -279,13 +309,19 @@ async def test_product_question_without_goods_card_transfers_without_message() -
     async def qa_provider():
         return StubQA()
 
+    settings = Settings(_env_file=None)
     runtime = ConsoleRuntime(
         repository,
         connector,
         qa_provider,
-        Settings(_env_file=None),
-        agent=OtherAgent(),
-        router=CustomerServiceRouter(),
+        settings,
+        agent_runtime=build_console_graph_runtime(
+            repository,
+            qa_provider,
+            settings,
+            agent=OtherAgent(),
+            router=CustomerServiceRouter(),
+        ),
     )
     try:
         await runtime.ensure_initialized()
@@ -327,13 +363,19 @@ async def test_social_expression_precedes_faq_and_rag() -> None:
     async def qa_provider():
         return qa
 
+    settings = Settings(_env_file=None)
     runtime = ConsoleRuntime(
         repository,
         connector,
         qa_provider,
-        Settings(_env_file=None),
-        agent=OtherAgent(),
-        router=CustomerServiceRouter(),
+        settings,
+        agent_runtime=build_console_graph_runtime(
+            repository,
+            qa_provider,
+            settings,
+            agent=OtherAgent(),
+            router=CustomerServiceRouter(),
+        ),
     )
     try:
         await runtime.ensure_initialized()

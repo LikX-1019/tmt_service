@@ -50,7 +50,13 @@ async def runtime_parts():
     async def unused_qa_provider():
         raise AssertionError("人工发送不应调用 QA")
 
-    runtime = ConsoleRuntime(repository, connector, unused_qa_provider, Settings())
+    runtime = ConsoleRuntime(
+        repository,
+        connector,
+        unused_qa_provider,
+        Settings(),
+        agent_runtime=object(),  # type: ignore[arg-type]
+    )
     yield runtime, repository, connector
     await runtime.close()
     await engine.dispose()

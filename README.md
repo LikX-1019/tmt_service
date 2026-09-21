@@ -27,8 +27,9 @@ Unified Chat AgentGraph
 FAQ / Guard / Social / Product / RAG / Fallback
 ```
 
-`UNIFIED_CHAT_RUNTIME=graph` 是生产默认值。`legacy` 只是临时紧急回滚开关，
-冻结且不新增业务能力，计划在迁移 Phase G6 移除。
+G6 已删除 Unified Chat 的 legacy runtime 开关和备用 AI 编排路径。当前生产入口
+只有 `ChatService → AgentRuntime → Unified Chat AgentGraph`；如需回退迁移结果，
+使用 Git revert，而不是通过运行时配置切换。
 
 `POST /api/v1/qa` 仍是独立知识问答接口，供 QA/RAG 调试和兼容调用使用；它不是
 Customer Demo 的默认主链路。

@@ -177,7 +177,7 @@ def _fake_qa_provider(qa: FakeQA):
 
 
 def state(message: str, product_id: str | None = None) -> AgentState:
-    runtime = ChatStateRuntime(lifecycle_mode="graph")
+    runtime = ChatStateRuntime()
     result = runtime.create_state(
         message=message,
         conversation_id=f"c-{message}",

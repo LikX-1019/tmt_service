@@ -172,7 +172,7 @@ def product_response(index=1):
 def graph_state(message, product_id=None):
     from app.agent.state import ProductReference
 
-    state = ChatStateRuntime(lifecycle_mode="graph").create_state(
+    state = ChatStateRuntime().create_state(
         message=message,
         conversation_id=f"c-{message}",
         customer_id="u1",
@@ -212,19 +212,30 @@ def capabilities(
     answers = answers or FakeProductAnswers()
     fallback = fallbacks or FakeFallback()
     semantic = semantic or FixedSemanticResolver(matched=False)
-    legacy_semantic = semantic
-    legacy = ChatService(
-        rule_registry=default_rule_registry(),
-        conversation_repository=legacy_repo,
-        product_repository=product_repo,
-        product_answer_service=answers,
-        qa_provider=lambda: _async(qa),
-        product_resolver=ProductResolver(),
-        social_router=SocialRouter(),
-        fallback_service=fallback,
-        semantic_product_resolver=legacy_semantic,
+    def graph_capabilities(conversations):
+        return AgentCapabilities(
+            rules=default_rule_registry(),
+            social_router=SocialRouter(),
+            product_resolver=ProductResolver(),
+            semantic_products=semantic,
+            product_answers=answers,
+            fallbacks=fallback,
+            qa_provider=lambda: _async(qa),
+            conversations=conversations,
+            products=product_repo,
+        )
+
+    facade_coordinator = StateCoordinator(FileCheckpointStore())
+    facade = ChatService(
+        agent_runtime=AgentRuntime(
+            build_unified_chat_graph(
+                graph_capabilities(legacy_repo),
+                coordinator=facade_coordinator,
+            ),
+            coordinator=facade_coordinator,
+        )
     )
-    caps = AgentCapabilities(
+    direct_caps = AgentCapabilities(
         rules=default_rule_registry(),
         social_router=SocialRouter(),
         product_resolver=ProductResolver(),
@@ -235,10 +246,10 @@ def capabilities(
         conversations=graph_repo,
         products=product_repo,
     )
-    coordinator = StateCoordinator(FileCheckpointStore())
-    return legacy, AgentRuntime(
-        build_unified_chat_graph(caps, coordinator=coordinator),
-        coordinator=coordinator,
+    direct_coordinator = StateCoordinator(FileCheckpointStore())
+    return facade, AgentRuntime(
+        build_unified_chat_graph(direct_caps, coordinator=direct_coordinator),
+        coordinator=direct_coordinator,
     )
 
 

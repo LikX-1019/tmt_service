@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from app.agent.checkpoint import CheckpointStore
@@ -35,8 +35,6 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
-CHAT_TURN_NODE = "chat_turn"
-
 _PRODUCT_SOURCE_MAP = {
     "request": "customer_selected",
     "url": "message_extraction",
@@ -111,7 +109,6 @@ class ChatStateRuntime:
         *,
         cleanup_completed: bool = True,
         coordinator: StateCoordinator | None = None,
-        lifecycle_mode: Literal["graph", "legacy"] = "legacy",
     ) -> None:
         self._store = checkpoint_store
         self._coordinator = (
@@ -122,7 +119,6 @@ class ChatStateRuntime:
             else None
         )
         self._cleanup_completed = cleanup_completed
-        self.lifecycle_mode = lifecycle_mode
 
     def create_state(
         self,
@@ -133,11 +129,7 @@ class ChatStateRuntime:
         service_stage: str | None,
         entry_node: str | None = None,
     ) -> AgentState:
-        entry = entry_node or (
-            "session_hydrate"
-            if self.lifecycle_mode == "graph"
-            else CHAT_TURN_NODE
-        )
+        entry = entry_node or "session_hydrate"
         run_id = str(uuid4())
         turn_id = str(uuid4())
         session_id = conversation_id or f"chat-{uuid4()}"
@@ -179,14 +171,8 @@ class ChatStateRuntime:
         return state
 
     async def start(self, state: AgentState) -> None:
-        if self.lifecycle_mode == "graph":
-            # AgentRuntime owns workflow_created and StateCoordinator owns each node.
-            return
-        if self._coordinator is not None:
-            await self._coordinator.create(state)
-        state.begin_node(CHAT_TURN_NODE)
-        if self._store is not None:
-            await self._store.save(state, reason=f"before:{CHAT_TURN_NODE}")
+        # AgentRuntime owns workflow_created and StateCoordinator owns each node.
+        return
 
     def hydrate_product_binding(self, state: AgentState, product_id: str) -> None:
         session = _require_session(state)
@@ -314,18 +300,11 @@ class ChatStateRuntime:
         session.short_term_memory.last_assistant_message_id = output_message.id
         state.final_answer = response.answer
         turn.completed_at = utcnow()
-        if self.lifecycle_mode == "legacy":
-            state.complete_node(CHAT_TURN_NODE)
-        else:
-            state.sync_contract_state()
+        state.sync_contract_state()
         if self._store is not None:
             await self._store.save(
                 state,
-                reason=(
-                    f"after:{CHAT_TURN_NODE}"
-                    if self.lifecycle_mode == "legacy"
-                    else "workflow_completed"
-                ),
+                reason="workflow_completed",
             )
             if self._cleanup_completed:
                 try:
@@ -341,64 +320,25 @@ class ChatStateRuntime:
 
     async def fail(self, state: AgentState, error: Exception) -> None:
         error_code = type(error).__name__.upper()
-        turn = _require_turn(state)
-        if self.lifecycle_mode == "graph":
-            # No virtual chat_turn exists in graph mode. Persist a transport-level
-            # failure only when a non-node Graph error escapes without durable state.
-            if state.status is WorkflowStatus.COMPLETED:
-                return
-            if state.error is None:
-                state.status = WorkflowStatus.FAILED
-                state.resume_from = None
-                state.error = StateError(
-                    node="graph_transport",
-                    code=error_code,
-                    message="Agent Graph transport failure",
-                    retryable=True,
-                )
-            state.sync_contract_state()
-            if self._store is not None:
-                await self._store.save(
-                    state,
-                    reason=f"failed:{state.error.node}",
-                )
+        # No virtual chat_turn exists in graph mode. Persist a transport-level
+        # failure only when a non-node Graph error escapes without durable state.
+        if state.status is WorkflowStatus.COMPLETED:
             return
-        graph_failure = (
-            state.error is not None
-            and state.current_node is None
-            and state.error.node != CHAT_TURN_NODE
-        )
-        if graph_failure:
-            turn.fallback_reason = state.error.code
-            state.sync_contract_state()
-        else:
-            turn.fallback_reason = "chat_processing_failed"
-        if graph_failure:
-            if self._store is not None:
-                await self._store.save(
-                    state,
-                    reason=f"failed:{state.error.node}",
-                )
-            return
-        if state.current_node == CHAT_TURN_NODE:
-            state.fail_node(
-                CHAT_TURN_NODE,
-                code=error_code,
-                retryable=True,
-                message="聊天请求处理失败",
-            )
-        else:
+        if state.error is None:
             state.status = WorkflowStatus.FAILED
-            state.resume_from = CHAT_TURN_NODE
+            state.resume_from = None
             state.error = StateError(
-                node=CHAT_TURN_NODE,
+                node="graph_transport",
                 code=error_code,
-                message="聊天请求处理失败",
+                message="Agent Graph transport failure",
                 retryable=True,
             )
-            state.sync_contract_state()
+        state.sync_contract_state()
         if self._store is not None:
-            await self._store.save(state, reason=f"failed:{CHAT_TURN_NODE}")
+            await self._store.save(
+                state,
+                reason=f"failed:{state.error.node}",
+            )
 
     def _record_response(self, state: AgentState, response: ChatResponse) -> None:
         turn = _require_turn(state)

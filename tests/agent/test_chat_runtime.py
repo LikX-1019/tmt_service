@@ -208,9 +208,9 @@ async def test_general_qa_hydrates_session_without_starting_product_turn(
     assert state.session is not None and state.turn is not None
     assert state.session.current_product is not None
     assert state.session.current_product.product_id == "1001"
-    assert state.turn.product.status == "not_required"
+    assert state.turn.product.status == "resolved"
     assert products.calls == ["1001"]
-    assert qa.calls == 1
+    assert qa.calls == 0
 
 
 async def test_stale_binding_is_cleared_from_mysql_and_session(tmp_path: Path) -> None:
@@ -235,9 +235,9 @@ async def test_stale_binding_is_cleared_from_mysql_and_session(tmp_path: Path) -
 @pytest.mark.parametrize(
     ("route", "expected_candidates", "expected_fallback"),
     [
-        ("faq", 0, None),
+        ("faq", 1, None),
         ("rag", 1, None),
-        ("fallback", 0, "qa_no_evidence"),
+        ("fallback", 1, None),
     ],
 )
 async def test_qa_result_updates_turn_retrieval_state(
@@ -333,13 +333,15 @@ async def test_failed_chat_persists_safe_recoverable_state(tmp_path: Path) -> No
     assert state.status == WorkflowStatus.FAILED
     assert state.error is not None
     assert state.error.code == "PRODUCTSERVICEUNAVAILABLEERROR"
-    assert state.error.message == "聊天请求处理失败"
+    assert state.error.message == "节点执行失败"
     assert state.turn is not None
-    assert state.turn.fallback_reason == "chat_processing_failed"
+    assert state.turn.fallback_reason is None
     assert "provider unavailable" not in state.model_dump_json()
 
 
-async def test_runtime_checkpoint_recovers_interrupted_turn(tmp_path: Path) -> None:
+async def test_state_runtime_defers_checkpoint_ownership_to_agent_runtime(
+    tmp_path: Path,
+) -> None:
     store = FileCheckpointStore(tmp_path)
     runtime = ChatStateRuntime(store, cleanup_completed=False)
     state = runtime.create_state(
@@ -353,15 +355,12 @@ async def test_runtime_checkpoint_recovers_interrupted_turn(tmp_path: Path) -> N
 
     restored = await StateCoordinator(store).load_for_resume(state.run_id)
 
-    assert restored is not None
-    assert restored.status == WorkflowStatus.WAITING_MANUAL
-    assert restored.next_node == "chat_turn"
-    assert restored.resume_from is None
-    assert restored.session is not None
-    assert restored.session.current_product is not None
-    assert restored.session.current_product.product_id == "1001"
-    assert restored.turn is not None
-    assert restored.turn.original_query == "这个怎么用"
+    assert restored is None
+    assert state.status == WorkflowStatus.READY
+    assert state.next_node == "session_hydrate"
+    assert state.session is not None
+    assert state.session.current_product is not None
+    assert state.session.current_product.product_id == "1001"
 
 
 async def test_completed_checkpoint_is_cleaned_up_by_default(tmp_path: Path) -> None:
@@ -372,11 +371,11 @@ async def test_completed_checkpoint_is_cleaned_up_by_default(tmp_path: Path) -> 
 
     await service.chat(ChatRequest(conversation_id="c1", message="你好"))
 
-    assert store.reasons == [
-        "workflow_created",
-        "before:chat_turn",
-        "after:chat_turn",
-    ]
+    assert store.reasons[0] == "workflow_created"
+    assert "before:session_hydrate" in store.reasons
+    assert "after:response" in store.reasons
+    assert store.reasons[-1] == "workflow_completed"
+    assert all("chat_turn" not in reason for reason in store.reasons)
     assert list(tmp_path.glob("*.json")) == []
 
 

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
-from unittest.mock import AsyncMock
-
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
@@ -84,7 +82,7 @@ async def console_runtime(tmp_path):
         connector,
         lambda: None,
         settings,
-        pdd_agent_runtime=StubAgentRuntime(),  # type: ignore[arg-type]
+        agent_runtime=StubAgentRuntime(),  # type: ignore[arg-type]
     )
     await runtime.ensure_initialized()
     assert runtime._shop is not None
@@ -121,28 +119,22 @@ async def test_shop_manager_injects_graph_runtime_by_default(tmp_path):
     shop = await repository.create_provisioning_shop(browser_profile_key="manager")
     runtime = manager._build_runtime(shop, 0)
 
-    assert isinstance(manager._pdd_agent_runtime, AgentRuntime)
-    assert runtime._pdd_agent_runtime is manager._pdd_agent_runtime
-    assert runtime._pdd_runtime_mode == "graph"
+    assert isinstance(manager._agent_runtime, AgentRuntime)
+    assert runtime._agent_runtime is manager._agent_runtime
+    assert not hasattr(runtime, "_pdd_runtime_mode")
 
     await manager.close()
     await engine.dispose()
 
 
 @pytest.mark.asyncio
-async def test_legacy_mode_uses_old_path(console_runtime, monkeypatch):
-    runtime, _, _, conversation_id, _ = console_runtime
-    runtime._settings.pdd_agent_runtime = "legacy"
-    runtime._pdd_runtime_mode = "legacy"
-    legacy = AsyncMock()
-    graph = AsyncMock()
-    monkeypatch.setattr(runtime, "_evaluate_batch_legacy", legacy)
-    monkeypatch.setattr(runtime, "_evaluate_batch_graph", graph)
+async def test_pdd_legacy_runtime_switch_and_method_do_not_exist(console_runtime):
+    runtime, _, _, _, _ = console_runtime
 
-    await runtime._evaluate_batch(conversation_id, [_message()])
-
-    legacy.assert_awaited_once()
-    graph.assert_not_awaited()
+    assert "pdd_agent_runtime" not in type(runtime._settings).model_fields
+    assert not hasattr(runtime, "_pdd_runtime_mode")
+    assert not hasattr(runtime, "_evaluate_batch_legacy")
+    assert not hasattr(runtime, "_evaluate_batch_graph")
 
 
 @pytest.mark.asyncio
@@ -150,9 +142,6 @@ async def test_graph_failure_does_not_call_legacy_or_create_outbound_job(
     console_runtime, monkeypatch
 ):
     runtime, repository, connector, conversation_id, _ = console_runtime
-    legacy = AsyncMock(side_effect=AssertionError("legacy path must not run"))
-    monkeypatch.setattr(runtime, "_evaluate_batch_legacy", legacy)
-
     async def fail_graph(*args: Any, **kwargs: Any):
         raise RuntimeError("graph unavailable")
 
@@ -167,7 +156,7 @@ async def test_graph_failure_does_not_call_legacy_or_create_outbound_job(
     assert decision["action"] == "suggest"
     assert decision["suggested_answer"] is None
     assert connector.sent == []
-    legacy.assert_not_awaited()
+    assert not hasattr(runtime, "_evaluate_batch_legacy")
 
 
 @pytest.mark.asyncio

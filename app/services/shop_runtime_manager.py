@@ -65,7 +65,7 @@ class ShopRuntimeManager:
         self._restart_tasks: dict[str, asyncio.Task[None]] = {}
         self._lock = asyncio.Lock()
         self._initialized = False
-        self._pdd_agent_runtime = self._build_pdd_agent_runtime()
+        self._agent_runtime = self._build_agent_runtime()
 
     async def _load_pdd_greeting_config(self, shop_id: str | None) -> dict[str, Any]:
         """Load greeting configuration for the PDD Graph without channel orchestration."""
@@ -77,7 +77,7 @@ class ShopRuntimeManager:
             }
         return await self.repository.get_greeting_config(shop_id)
 
-    def _build_pdd_agent_runtime(self) -> AgentRuntime:
+    def _build_agent_runtime(self) -> AgentRuntime:
         """Compose the shared business Graph used by every PDD shop runtime."""
         product_provider = ProductRepository(HttpProductClient(self.settings))
         capabilities = AgentCapabilities(
@@ -135,7 +135,7 @@ class ShopRuntimeManager:
             broker=self.broker,
             identity_handler=identity_handler,
             runtime_status_handler=status_handler,
-            pdd_agent_runtime=self._pdd_agent_runtime,
+            agent_runtime=self._agent_runtime,
         )
 
     def _schedule_restart(self, shop_id: str) -> None:

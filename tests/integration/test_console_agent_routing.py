@@ -14,6 +14,7 @@ from app.integrations.pdd.base import (
 from app.models import Base, Conversation
 from app.repositories.console_repository import ConsoleRepository
 from app.services.console_runtime import ConsoleRuntime
+from tests.integration.console_graph import build_console_graph_runtime
 
 
 class ReadyConnector(CustomerServiceConnector):
@@ -65,12 +66,18 @@ async def test_greeting_routes_to_agent_before_qa() -> None:
     async def qa_provider():
         raise AssertionError("日常打招呼不应进入 QA/RAG")
 
+    settings = Settings(_env_file=None, default_shop_name="JAFFICK旗舰店")
     runtime = ConsoleRuntime(
         repository,
         ReadyConnector(),
         qa_provider,
-        Settings(_env_file=None, default_shop_name="JAFFICK旗舰店"),
-        agent=agent,
+        settings,
+        agent_runtime=build_console_graph_runtime(
+            repository,
+            qa_provider,
+            settings,
+            agent=agent,
+        ),
     )
     try:
         await runtime.ensure_initialized()

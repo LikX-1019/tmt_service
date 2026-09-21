@@ -17,6 +17,7 @@ from app.integrations.pdd.base import (
 from app.models import Base, Conversation, OutboundJob
 from app.repositories.console_repository import ConsoleRepository
 from app.services.console_runtime import ConsoleRuntime
+from tests.integration.console_graph import build_console_graph_runtime
 
 
 class ReadyConnector(CustomerServiceConnector):
@@ -69,12 +70,19 @@ async def test_rule_greeting_config_is_immediate_and_respects_send_gates() -> No
     async def qa_provider():
         raise AssertionError("规则命中的问候不应进入 QA/RAG")
 
+    settings = Settings(_env_file=None, default_shop_name="JAFFICK旗舰店")
+    greeting_agent = CustomerServiceAgent(intent_llm=NeverCalledLLM())
     runtime = ConsoleRuntime(
         repository,
         connector,
         qa_provider,
-        Settings(_env_file=None, default_shop_name="JAFFICK旗舰店"),
-        agent=CustomerServiceAgent(intent_llm=NeverCalledLLM()),
+        settings,
+        agent_runtime=build_console_graph_runtime(
+            repository,
+            qa_provider,
+            settings,
+            agent=greeting_agent,
+        ),
     )
     try:
         await runtime.ensure_initialized()

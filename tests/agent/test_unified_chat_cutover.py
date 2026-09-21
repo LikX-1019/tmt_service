@@ -126,7 +126,6 @@ def make_service(
     *,
     messages=None,
     checkpoint_dir=None,
-    mode="graph",
     runtime=None,
     capabilities_instance=None,
 ):
@@ -137,12 +136,10 @@ def make_service(
     state_runtime = ChatStateRuntime(
         store,
         cleanup_completed=False,
-        lifecycle_mode=mode,
     )
     conversations = FakeConversations()
     caps = capabilities_instance or capabilities(conversations=conversations)
     service = ChatService(
-        conversation_repository=conversations,
         message_repository=messages,
         state_runtime=state_runtime,
         agent_runtime=runtime
@@ -150,7 +147,6 @@ def make_service(
             build_unified_chat_graph(caps, coordinator=coordinator),
             coordinator=coordinator,
         ),
-        runtime_mode=mode,
     )
     return service, state_runtime, store
 
@@ -166,43 +162,26 @@ def request(message, conversation_id="c1", product_id=None):
 
 
 @pytest.mark.asyncio
-async def test_graph_is_default_and_does_not_call_legacy_route(monkeypatch):
-    async def forbidden(*args, **kwargs):
-        raise AssertionError("graph mode must not call _route_chat")
-
-    monkeypatch.setattr(ChatService, "_route_chat", forbidden)
+async def test_chat_service_has_no_legacy_route_and_always_calls_graph():
     service, _, _ = make_service()
     response = await service.chat(request("今天天气怎么样"))
 
-    assert service._runtime_mode == "graph"
+    assert not hasattr(ChatService, "_route_chat")
     assert response.source == "llm_fallback"
     assert response.route == "llm_fallback"
     assert response.answer == "fallback answer"
 
 
 @pytest.mark.asyncio
-async def test_legacy_mode_does_not_invoke_graph():
-    class ExplodingRuntime:
-        async def invoke(self, state):
-            raise AssertionError("legacy mode must not invoke graph")
+async def test_legacy_runtime_switch_is_not_accepted():
+    service, _, _ = make_service()
 
-    service, _, _ = make_service(mode="legacy", runtime=ExplodingRuntime())
-    response = await service.chat(request("你好"))
-
-    assert response.route == "greeting"
-    assert response.source == "rule"
+    with pytest.raises(TypeError, match="runtime_mode"):
+        ChatService(agent_runtime=service._agent_runtime, runtime_mode="legacy")
 
 
 @pytest.mark.asyncio
-async def test_graph_failure_does_not_fall_back_to_legacy(monkeypatch):
-    calls = []
-
-    async def forbidden(*args, **kwargs):
-        calls.append(1)
-        raise AssertionError("automatic rollback is forbidden")
-
-    monkeypatch.setattr(ChatService, "_route_chat", forbidden)
-
+async def test_graph_failure_has_no_fallback_path():
     class ExplodingRuntime:
         async def invoke(self, state):
             failed = state.model_copy(deep=True)
@@ -217,7 +196,7 @@ async def test_graph_failure_does_not_fall_back_to_legacy(monkeypatch):
     with pytest.raises(AgentGraphExecutionError):
         await service.chat(request("今天天气怎么样"))
 
-    assert calls == []
+    assert not hasattr(ChatService, "_route_chat")
 
 
 @pytest.mark.asyncio
@@ -375,9 +354,8 @@ async def test_production_dependency_composes_graph_mode(monkeypatch):
 
     monkeypatch.setattr(AgentRuntime, "invoke", fake_invoke)
     service = get_chat_service.__wrapped__()
-    assert service._runtime_mode == "graph"
     assert service._agent_runtime is not None
     response = await service.chat(request("今天天气怎么样", conversation_id="di"))
 
     assert response.answer == "graph called"
-    assert get_settings().unified_chat_runtime == "graph"
+    assert "unified_chat_runtime" not in type(get_settings()).model_fields

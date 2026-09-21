@@ -68,21 +68,15 @@ def get_chat_service() -> ChatService:
         products=products,
     )
     return ChatService(
-        conversation_repository=conversations,
         message_repository=messages,
-        product_repository=products,
-        fallback_service=fallback_service,
-        qa_provider=get_qa_service,
         state_runtime=ChatStateRuntime(
             checkpoint_store,
             coordinator=coordinator,
-            lifecycle_mode=get_settings().unified_chat_runtime,
         ),
         agent_runtime=AgentRuntime(
             build_unified_chat_graph(capabilities, coordinator=coordinator),
             coordinator=coordinator,
         ),
-        runtime_mode=get_settings().unified_chat_runtime,
     )
 
 

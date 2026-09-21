@@ -4,7 +4,6 @@ import pytest
 from app.api.dependencies import get_chat_service
 from app.core.exceptions import LLMInvocationError
 from app.schemas.chat import ChatRequest, ChatResponse
-from app.services.chat_service import ChatService
 from main import app
 
 
@@ -74,7 +73,7 @@ async def test_chat_api_rejects_blank_message() -> None:
 
 @pytest.mark.asyncio
 async def test_chat_api_hides_llm_traceback() -> None:
-    class BrokenChatService(ChatService):
+    class BrokenChatService:
         async def chat(self, request: ChatRequest) -> ChatResponse:
             raise LLMInvocationError()
 
@@ -104,17 +103,11 @@ async def test_chat_api_hides_llm_traceback() -> None:
 
 @pytest.mark.asyncio
 async def test_chat_api_sanitizes_qa_provider_errors() -> None:
-    class BrokenQAService:
-        def match_exact(self, *_args: object, **_kwargs: object):
+    class FailingGraphService:
+        async def chat(self, request: ChatRequest) -> ChatResponse:
             raise LLMInvocationError("DeepSeek private API key rejected")
 
-        async def answer(self, *_args: object, **_kwargs: object) -> None:
-            raise LLMInvocationError("DeepSeek private API key rejected")
-
-    async def qa_provider() -> BrokenQAService:
-        return BrokenQAService()
-
-    service = ChatService(qa_provider=qa_provider)
+    service = FailingGraphService()
     app.dependency_overrides[get_chat_service] = lambda: service
     try:
         async with httpx.AsyncClient(

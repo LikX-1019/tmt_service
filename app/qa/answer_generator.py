@@ -10,7 +10,20 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from app.factories.llm_factory import LLMFactory
 from app.prompts.qa import QA_SYSTEM_PROMPT, QA_USER_PROMPT
 from app.qa.models import RetrievalDocument
-from app.services.chat_service import _content_to_text
+
+
+def _content_to_text(content: Any) -> str:
+    """Normalize LangChain string and text-block response content."""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = [
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+        return "".join(parts).strip()
+    return str(content).strip() if content is not None else ""
 
 
 class QAAnswerGenerator:

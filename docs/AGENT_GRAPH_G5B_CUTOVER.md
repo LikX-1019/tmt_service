@@ -1,5 +1,8 @@
 # Agent Graph G5B PDD Production Cutover
 
+> Historical note: this document records the G5B cutover state. The temporary
+> `PDD_AGENT_RUNTIME` rollback switch described below was removed in G6.
+
 ## Result
 
 ```text

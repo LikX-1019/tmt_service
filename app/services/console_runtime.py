@@ -9,15 +9,12 @@ from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
 from typing import Any, Awaitable, Callable
 
-from app.agent.greeting import default_reply_templates, default_trigger_groups
 from app.agent.channels.pdd_adapter import (
     PDDChannelDecision,
     evaluate_pdd_channel_policy,
     invoke_pdd_agent,
 )
 from app.agent.runtime import AgentRuntime
-from app.agent.routing import CustomerServiceRouter
-from app.agent.service import CustomerContext, CustomerServiceAgent
 from app.core.config import Settings, get_settings
 from app.core.logging import create_log_task
 from app.core.exceptions import (
@@ -40,12 +37,8 @@ from app.repositories.console_repository import ConsoleRepository
 from app.services.auto_reply_policy import AutoReplyPolicy, Calibration
 from app.services.event_broker import EventBroker
 from app.services.message_asset_storage import MessageAssetStorage
-from app.services.social_router import SocialRouter
 from app.services.product_service import (
-    HttpProductClient,
     ProductAnswerService,
-    ProductLookupError,
-    ProductProvider,
 )
 
 
@@ -77,40 +70,25 @@ class ConsoleRuntime:
         connector: CustomerServiceConnector,
         qa_provider: QAProvider,
         settings: Settings | None = None,
-        agent: CustomerServiceAgent | None = None,
-        router: CustomerServiceRouter | None = None,
-        product_provider: ProductProvider | None = None,
         product_answer_service: ProductAnswerService | None = None,
-        social_router: SocialRouter | None = None,
         *,
         shop_id: str | None = None,
         broker: EventBroker | None = None,
         identity_handler: IdentityHandler | None = None,
         runtime_status_handler: RuntimeStatusHandler | None = None,
-        pdd_agent_runtime: AgentRuntime | None = None,
+        agent_runtime: AgentRuntime,
     ) -> None:
         self._repository = repository
         self._connector = connector
         self._qa_provider = qa_provider
         self._settings = settings or get_settings()
-        self._agent = agent or CustomerServiceAgent()
-        self._router = router or CustomerServiceRouter()
-        self._product_provider = product_provider or HttpProductClient(self._settings)
         self._product_answer_service = product_answer_service or ProductAnswerService()
-        self._social_router = social_router or SocialRouter()
         self._broker = broker or EventBroker()
         self._legacy_single_shop_mode = shop_id is None
         self._shop_id = shop_id
         self._identity_handler = identity_handler
         self._runtime_status_handler = runtime_status_handler
-        self._pdd_agent_runtime = pdd_agent_runtime
-        # Directly constructed test/embedding runtimes predate the composition-root
-        # injection. Production always injects the graph runtime from ShopRuntimeManager.
-        self._pdd_runtime_mode = (
-            self._settings.pdd_agent_runtime
-            if pdd_agent_runtime is not None
-            else "legacy"
-        )
+        self._agent_runtime = agent_runtime
         self._shop: dict[str, Any] | None = None
         self._initialized = False
         self._init_lock = asyncio.Lock()
@@ -413,14 +391,6 @@ class ConsoleRuntime:
     async def _evaluate_batch(
         self, conversation_id: str, batch: list[BrowserMessage]
     ) -> None:
-        if self._pdd_runtime_mode == "graph":
-            await self._evaluate_batch_graph(conversation_id, batch)
-            return
-        await self._evaluate_batch_legacy(conversation_id, batch)
-
-    async def _evaluate_batch_graph(
-        self, conversation_id: str, batch: list[BrowserMessage]
-    ) -> None:
         """Run PDD AI decisions through the injected shared Agent Graph."""
         conversation = await self._repository.get_conversation(
             conversation_id, self._shop_id
@@ -454,10 +424,9 @@ class ConsoleRuntime:
         if status.status != ConnectorStatus.READY:
             blockers.append("拼多多连接器未就绪")
 
-        assert self._pdd_agent_runtime is not None
         try:
             state = await invoke_pdd_agent(
-                self._pdd_agent_runtime,
+                self._agent_runtime,
                 conversation_id=conversation_id,
                 shop_id=str(shop["id"]) if shop else "",
                 customer_id=str(conversation.get("customer_id") or "") or None,
@@ -543,287 +512,6 @@ class ConsoleRuntime:
         if decision.get("action") == "auto_send" and decision.get("suggested_answer"):
             job, created = await self._repository.create_outbound_job(
                 conversation_id,
-                client_request_id=f"auto:{batch_key[:59]}",
-                source="auto",
-                content=str(decision["suggested_answer"])[:400],
-            )
-            if created:
-                await self._emit("outbound.updated", job)
-                self._send_queue.put_nowait(str(job["id"]))
-
-    async def _evaluate_batch_legacy(
-        self, conversation_id: str, batch: list[BrowserMessage]
-    ) -> None:
-        conversation = await self._repository.get_conversation(
-            conversation_id, self._shop_id
-        )
-        if conversation is None:
-            return
-        assert self._shop is not None
-        shop = await self._repository.get_shop(self._shop["id"])
-        status = await self._connector.status()
-        allow_auto = bool(
-            shop
-            and shop["global_auto_reply_enabled"]
-            and (
-                shop["reception_mode"] == "guarded_auto"
-                or self._legacy_single_shop_mode
-            )
-            and conversation["auto_reply_enabled"]
-            and status.status == ConnectorStatus.READY
-        )
-        query = "\n".join(message.content or "" for message in batch[-5:]).strip()
-        batch_key = sha256("|".join(message.fingerprint for message in batch).encode()).hexdigest()
-        decision_payload: dict[str, Any] | None = None
-        knowledge_gap_reason_code: str | None = None
-
-        if self._router.requires_handoff(query):
-            await self._handoff(
-                conversation_id=conversation_id,
-                shop_id=str(shop["id"]) if shop else "",
-                batch_key=batch_key,
-                reason="售后或争议问题已转人工处理",
-                send_reply=True,
-                product_id=str(conversation.get("goods_id") or "") or None,
-                product_name=str(conversation.get("goods_name") or "") or None,
-            )
-            return
-
-        try:
-            greeting_config = await self._repository.get_greeting_config(str(shop["id"]))
-        except Exception:
-            logger.exception(
-                "greeting_config_load_failed",
-                extra={"event": "greeting_config_load_failed"},
-            )
-            greeting_config = {
-                "enabled": True,
-                "trigger_groups": default_trigger_groups(),
-                "reply_templates": default_reply_templates(),
-            }
-        try:
-            agent_reply = await self._agent.run(
-                query,
-                CustomerContext(
-                    customer_id=str(conversation.get("customer_id") or "") or None,
-                    platform_customer_id=(
-                        str(conversation.get("platform_conversation_id") or "") or None
-                    ),
-                    display_name=str(conversation.get("display_name") or "") or None,
-                    shop_id=str(shop.get("id") or "") if shop else None,
-                    shop_name=str(shop.get("name") or "") if shop else None,
-                    goods_id=str(conversation.get("goods_id") or "") or None,
-                    goods_name=str(conversation.get("goods_name") or "") or None,
-                ),
-                greeting_config=greeting_config,
-            )
-        except Exception:
-            # 意图模型不可用时保留既有 QA/RAG 降级路径，不让新增分支阻断接待。
-            logger.exception(
-                "agent_intent_routing_failed",
-                extra={"event": "agent_intent_routing_failed"},
-            )
-        else:
-            if agent_reply.intent == "daily_greeting" and agent_reply.answer:
-                blockers: list[str] = []
-                if not shop or not shop["global_auto_reply_enabled"]:
-                    blockers.append("全局自动接待未开启")
-                if (
-                    not self._legacy_single_shop_mode
-                    and (not shop or shop["reception_mode"] != "guarded_auto")
-                ):
-                    blockers.append("当前为人机协同模式")
-                if not conversation["auto_reply_enabled"]:
-                    blockers.append("当前会话为人工接待")
-                if status.status != ConnectorStatus.READY:
-                    blockers.append("拼多多连接器未就绪")
-                source_label = (
-                    "规则" if agent_reply.recognition_source == "rule" else "模型"
-                )
-                decision_payload = {
-                    "batch_key": batch_key,
-                    "route": "greeting",
-                    "action": "auto_send" if allow_auto else "suggest",
-                    "greeting_type": agent_reply.greeting_type,
-                    "recognition_source": agent_reply.recognition_source,
-                    "top_score": agent_reply.confidence,
-                    "risk_reason": (
-                        f"{source_label}识别为一般问候，已进入自动发送队列"
-                        if allow_auto
-                        else f"{source_label}识别为一般问候；{'；'.join(blockers)}，仅生成建议"
-                    ),
-                    "suggested_answer": agent_reply.answer,
-                    "policy_version": self._settings.auto_reply_policy_version,
-                }
-
-        if decision_payload is None:
-            social_decision = await self._social_router.classify(query)
-            if social_decision.intent != "other" and social_decision.response:
-                decision_payload = {
-                    "batch_key": batch_key,
-                    "route": social_decision.intent,
-                    "action": "auto_send" if allow_auto else "suggest",
-                    "recognition_source": social_decision.source,
-                    "top_score": social_decision.confidence,
-                    "risk_reason": (
-                        f"识别为{'社交' if social_decision.intent == 'small_talk' else '情绪'}表达，"
-                        "已进入自动发送队列"
-                        if allow_auto
-                        else "识别为社交或情绪表达；未满足自动发送条件，仅生成建议"
-                    ),
-                    "suggested_answer": social_decision.response,
-                    "policy_version": self._settings.auto_reply_policy_version,
-                }
-
-        if decision_payload is None:
-            try:
-                qa_service = await self._qa_provider()
-                faq_result = qa_service.match_exact(
-                    query,
-                    product_code=str(conversation.get("goods_id") or "") or None,
-                    product_name=str(conversation.get("goods_name") or "") or None,
-                )
-                if faq_result is not None:
-                    policy = self._policy.evaluate(
-                        query, faq_result, conversation, allow_auto=allow_auto
-                    )
-                    if policy.reason_code in KNOWLEDGE_GAP_REASON_CODES:
-                        knowledge_gap_reason_code = policy.reason_code
-                    decision_payload = {
-                        "batch_key": batch_key,
-                        "route": policy.route,
-                        "action": policy.action,
-                        "qa_code": policy.qa_code,
-                        "top_score": policy.top_score,
-                        "score_margin": policy.margin,
-                        "risk_reason": policy.reason,
-                        "suggested_answer": policy.answer,
-                        "policy_version": self._settings.auto_reply_policy_version,
-                    }
-                else:
-                    classification = await self._router.classify(
-                        query,
-                        has_product_context=bool(conversation.get("goods_id")),
-                    )
-                    if classification.route == "product":
-                        goods_id = str(conversation.get("goods_id") or "").strip()
-                        if not goods_id:
-                            await self._handoff(
-                                conversation_id=conversation_id,
-                                shop_id=str(shop["id"]) if shop else "",
-                                batch_key=batch_key,
-                                reason="商品咨询缺少可确认的商品卡片",
-                                send_reply=False,
-                            )
-                            await self._record_knowledge_gap(
-                                query,
-                                conversation=conversation,
-                                reason_code="PRODUCT_CONTEXT_MISSING",
-                            )
-                            return
-                        try:
-                            product = await self._product_provider.get_product(goods_id)
-                            product_answer = await self._product_answer_service.answer(
-                                query, product
-                            )
-                        except ProductLookupError:
-                            await self._handoff(
-                                conversation_id=conversation_id,
-                                shop_id=str(shop["id"]) if shop else "",
-                                batch_key=batch_key,
-                                reason="商品资料不可用或与会话商品不一致",
-                                send_reply=False,
-                                product_id=goods_id,
-                                product_name=str(conversation.get("goods_name") or "") or None,
-                            )
-                            await self._record_knowledge_gap(
-                                query,
-                                conversation=conversation,
-                                reason_code="PRODUCT_DATA_MISSING",
-                            )
-                            return
-                        except Exception:
-                            logger.exception("product_answer_failed", extra={"event": "product_answer_failed"})
-                            await self._handoff(
-                                conversation_id=conversation_id,
-                                shop_id=str(shop["id"]) if shop else "",
-                                batch_key=batch_key,
-                                reason="商品咨询暂无法安全回答，已转人工",
-                                send_reply=False,
-                                product_id=goods_id,
-                                product_name=str(conversation.get("goods_name") or "") or None,
-                            )
-                            return
-                        auto_send = self._product_answer_service.can_auto_send(
-                            product_answer, allow_auto=allow_auto, settings=self._settings
-                        )
-                        reason = None if auto_send else "商品回答需要人工确认"
-                        if not product_answer.facts_supported:
-                            knowledge_gap_reason_code = "PRODUCT_DATA_MISSING"
-                        elif product_answer.needs_clarification:
-                            knowledge_gap_reason_code = "PRODUCT_CONTEXT_MISSING"
-                        elif (
-                            product_answer.confidence
-                            < self._settings.product_auto_reply_min_confidence
-                        ):
-                            knowledge_gap_reason_code = "LOW_PRODUCT_CONFIDENCE"
-                        decision_payload = {
-                            "batch_key": batch_key,
-                            "route": "product",
-                            "action": "auto_send" if auto_send else "suggest",
-                            "product_id": product.id,
-                            "product_name": product.name,
-                            "top_score": product_answer.confidence,
-                            "risk_reason": reason,
-                            "suggested_answer": product_answer.answer,
-                            "policy_version": self._settings.auto_reply_policy_version,
-                        }
-                    else:
-                        result = await qa_service.answer_rag(
-                            query,
-                            product_code=str(conversation.get("goods_id") or "") or None,
-                            product_name=str(conversation.get("goods_name") or "") or None,
-                        )
-                        policy = self._policy.evaluate(
-                            query, result, conversation, allow_auto=allow_auto
-                        )
-                        if policy.reason_code in KNOWLEDGE_GAP_REASON_CODES:
-                            knowledge_gap_reason_code = policy.reason_code
-                        decision_payload = {
-                            "batch_key": batch_key,
-                            "route": policy.route,
-                            "action": policy.action,
-                            "qa_code": policy.qa_code,
-                            "top_score": policy.top_score,
-                            "score_margin": policy.margin,
-                            "risk_reason": policy.reason,
-                            "suggested_answer": policy.answer,
-                            "policy_version": self._settings.auto_reply_policy_version,
-                        }
-            except Exception:
-                logger.exception("qa_suggestion_failed", extra={"event": "qa_suggestion_failed"})
-                decision_payload = {
-                    "batch_key": batch_key,
-                    "route": "error",
-                    "action": "suggest",
-                    "risk_reason": "知识库或模型不可用",
-                    "policy_version": self._settings.auto_reply_policy_version,
-                }
-        decision = await self._repository.add_decision(
-            conversation_id, decision_payload, shop_id=self._shop_id
-        )
-        if knowledge_gap_reason_code is not None:
-            await self._record_knowledge_gap(
-                query,
-                conversation=conversation,
-                reason_code=knowledge_gap_reason_code,
-            )
-        await self._emit("reply.decision", {**decision, "conversation_id": conversation_id})
-        if decision.get("action") == "auto_send" and decision.get("suggested_answer"):
-            job, created = await self._repository.create_outbound_job(
-                conversation_id,
-                # outbound_jobs.client_request_id 最长 64；保留 59 位哈希仍有
-                # 236 bit 幂等空间，同时避免 MySQL 因 5 位前缀溢出而拒绝入队。
                 client_request_id=f"auto:{batch_key[:59]}",
                 source="auto",
                 content=str(decision["suggested_answer"])[:400],
