@@ -45,6 +45,12 @@ G6 已删除 legacy runtime 开关和备用 AI 编排路径。当前 Unified Cha
 上述共享 AgentGraph 业务路径；如需回退迁移结果，使用 Git revert，而不是通过
 运行时配置切换。
 
+AgentGraph Migration 已完成（G0-G8 全部 `COMPLETED`，`GRAPH_MIGRATION_FREEZE =
+completed`），普通功能开发已恢复。验收证据见 `docs/AGENT_GRAPH_G8_ACCEPTANCE.md`，
+阶段状态以 `docs/AGENT_GRAPH_MIGRATION.md` 为准。Freeze 解除后架构不变量继续有效：
+AgentGraph 仍是客服业务 workflow 的唯一 orchestrator，禁止新增第二套 Graph、State 或
+客服 Runtime，也禁止在 API / Service / Channel 层恢复业务决策分支。
+
 `POST /api/v1/qa` 仍是独立知识问答接口，供 QA/RAG 调试和兼容调用使用；它不是
 Customer Demo 的默认主链路。
 

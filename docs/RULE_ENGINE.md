@@ -13,15 +13,19 @@ AgentRuntime
     ↓
 shared AgentGraph
     ↓
-FAQ Exact → GuardNode
+GuardNode
+    ↓
+FAQ Exact
     ↓
 RuleRegistry
 ```
 
 PDD reaches the shared AgentGraph through its Channel Adapter and uses the PDD
-handoff/greeting/intent branches before knowledge generation. Unified Chat's
-FAQ-before-Guard order is preserved compatibility behavior and remains a G8
-acceptance decision; G7 does not change it.
+handoff/greeting/intent branches before knowledge generation. Unified Chat runs
+`session_hydrate → guard → faq_exact` before social/product/RAG/fallback, so a
+high-risk terminal Guard decision always precedes and cannot be overridden by an
+FAQ exact answer. The earlier FAQ-before-Guard compatibility debt was resolved and
+accepted in G8.
 
 ### Architecture Boundary
 
@@ -38,8 +42,8 @@ Conditional Edge
 `RuleRegistry` remains an independent deterministic capability. The Graph decides
 when Guard runs and which path follows the rule result; individual rule patterns must
 not be absorbed into Graph Edge logic. High-risk human/complaint/after-sale rules
-must precede knowledge answer, product generation, and generic LLM fallback unless
-a characterized exact-match exception is explicitly accepted in G8.
+must precede FAQ exact matching, knowledge answer, product generation, and generic LLM
+fallback. G8 accepted no exact-match exception to this ordering.
 
 The rule layer is a deterministic safety and context gate in the Unified Chat Graph:
 
@@ -228,7 +232,8 @@ Rule Engine is the deterministic decision layer. Product facts belong to Postgre
 
 ## 10. Guard channel context
 
-Graph production uses `GuardNode` and the current compatibility order remains
-FAQ Exact → Guard. GuardNode now supplies `AgentState.session.channel` and
-`AgentState.session.shop_id` to `RuleRegistry` instead of a hardcoded Unified Chat
-channel. FAQ-before-Guard remains tracked migration debt, not final safety design.
+Graph production uses `GuardNode` with the settled order `Guard → FAQ Exact`.
+GuardNode supplies `AgentState.session.channel` and `AgentState.session.shop_id` to
+`RuleRegistry` instead of a hardcoded Unified Chat channel, so the same deterministic
+layer stays channel-neutral. The FAQ-before-Guard migration debt was resolved by the
+G8 acceptance-blocker fix and is no longer tracked.

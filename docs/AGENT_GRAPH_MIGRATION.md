@@ -4,7 +4,7 @@
 
 ```text
 PHASE = Phase 2 — Unified Agent Graph Migration
-GRAPH_MIGRATION_FREEZE = active
+GRAPH_MIGRATION_FREEZE = completed
 G0 = COMPLETED
 G1 = COMPLETED
 G2 = COMPLETED
@@ -17,13 +17,15 @@ G5A = COMPLETED
 G5B = COMPLETED
 G6 = COMPLETED
 G7 = COMPLETED
+G8 = COMPLETED
 PLAN_VERSION = 1
 BASELINE_DATE = 2026-09-20
 ```
 
-本文档是 Agent Graph 迁移的唯一执行计划。在 Migration Acceptance 通过并把状态
-改为 `GRAPH_MIGRATION_FREEZE = completed` 之前，默认暂停所有非迁移必需的新业务
-功能开发。任何开发任务开始前必须先检查本文件状态。
+本文档是 Agent Graph 迁移的唯一执行计划。Migration Acceptance 已通过，状态为
+`GRAPH_MIGRATION_FREEZE = completed`，非迁移新业务功能开发已恢复。后续任何开发任务
+开始前仍须检查本文件状态，并继续遵守 Architecture Invariants：AgentGraph 是客服业务
+workflow 的唯一 orchestrator。G8 验收证据见 `docs/AGENT_GRAPH_G8_ACCEPTANCE.md`。
 
 ## Current State Inventory
 
@@ -312,20 +314,33 @@ Post-G7 acceptance-blocker fix: Unified Chat now runs `session_hydrate → guard
 before social/product/RAG/fallback paths. A high-risk terminal Guard decision therefore cannot be
 overridden by an FAQ exact answer, and FAQ miss continues to social. The prior FAQ Exact → Guard
 compatibility debt is resolved. PDD keeps its existing safe channel topology
-(`session_hydrate → pdd_handoff → pdd_greeting → social → faq/intent`). This fix does not start or
-complete G8 and Freeze remains active.
+(`session_hydrate → pdd_handoff → pdd_greeting → social → faq/intent`). At the time of that fix it
+did not start or complete G8, and Freeze remained active until G8 acceptance passed.
 
 ### Phase G8 — Migration Acceptance
 
 | Item | Boundary |
 |---|---|
-| Status | `NOT_STARTED` |
+| Status | `COMPLETED` |
 | Goal | 验收全量迁移并解除 Freeze。 |
 | Scope | 只更新验收证据和 `GRAPH_MIGRATION_FREEZE` 状态；如发现缺陷先回到对应阶段修复。 |
 | Prohibited | 在证据不完整时宣布完成；用部分路径通过代替全量验收；忽略外部环境导致的 skipped tests。 |
 | Tests | 全量 pytest/ruff；Unified Chat 与 PDD 双通道 acceptance；checkpoint recovery；security/data-safety review；GitNexus clean change analysis。 |
 | Acceptance | `AGENT_GRAPH_MIGRATION.md`、`STATE_DESIGN.md`、`RULE_ENGINE.md`、AGENTS 规则与实现一致；本文件“Migration Acceptance Checklist”全部通过。 |
 | Rollback | Freeze 保持 active，并记录阻断项。 |
+
+G8 验收证据见 `docs/AGENT_GRAPH_G8_ACCEPTANCE.md`。要点：
+
+* Baseline：`master`，HEAD `2c98dcf`，working tree clean；GitNexus index 刷新到当前 HEAD
+  （5,344 nodes / 11,629 edges / 344 flows）。
+* Unified Chat 与 PDD 都只经共享 `AgentRuntime → AgentGraph` 进入业务决策。
+* Unified Chat 顺序为 `session_hydrate → guard → faq_exact → social / product / RAG /
+  fallback`；高风险 terminal Guard 不可被 FAQ exact 覆盖。
+* State Contract、Checkpoint lifecycle、resume、PendingAction 与 `UNCERTAIN` 语义全部复核。
+* AutoReplyPolicy、persistence、OutboundJob、SendWorker 和 connector 仍在 Graph 之外。
+* `uv run pytest -q` 533 passed，0 skipped；Ruff、`uv sync --frozen`、`git diff --check` 通过。
+* `detect-changes --scope all` 无 partial/truncated，无未解释 HIGH/CRITICAL 风险。
+* Freeze 已解除；AgentGraph 仍是唯一客服 workflow orchestrator。
 
 ## Behavior-preserving Evidence
 
@@ -374,24 +389,25 @@ Memory Store 是能力层，不是 Graph 本身。
 
 ## Migration Acceptance Checklist
 
-解除 Freeze 前必须逐项勾选并附证据：
+解除 Freeze 前必须逐项勾选并附证据。G8 验收已完成，全部条目通过，证据见
+`docs/AGENT_GRAPH_G8_ACCEPTANCE.md`：
 
-- [ ] `/api/v1/chat` → AgentRuntime → AgentGraph。
+- [x] `/api/v1/chat` → AgentRuntime → AgentGraph。
 - [x] PDD → Channel Adapter → AgentRuntime → AgentGraph。
-- [ ] `ChatService` 不再承担业务 workflow。
-- [ ] `ConsoleRuntime` 不再承担 AI workflow。
+- [x] `ChatService` 不再承担业务 workflow。
+- [x] `ConsoleRuntime` 不再承担 AI workflow。
 - [x] Guard、Social、Product、FAQ、RAG、Fallback、Human、Response 主要业务步骤由 Graph Node 表达。
-- [ ] 主要业务分支由 Conditional Edge 表达。
+- [x] 主要业务分支由 Conditional Edge 表达。
 - [x] StatePatch 是 Node 状态更新机制。
 - [x] Checkpoint 与 Node execution 对齐。
 - [x] Customer Demo 与 PDD 共享相同 Agent Runtime/AgentGraph contract。
-- [ ] 旧 orchestrator 已删除或降级为薄 adapter。
-- [ ] 完整测试通过；skipped 项均有外部原因。
-- [ ] Ruff 通过。
-- [ ] GitNexus change analysis 无未解释 HIGH/CRITICAL 风险。
-- [ ] 架构文档与实际实现一致。
+- [x] 旧 orchestrator 已删除或降级为薄 adapter。
+- [x] 完整测试通过；skipped 项均有外部原因（实际无 skipped）。
+- [x] Ruff 通过。
+- [x] GitNexus change analysis 无未解释 HIGH/CRITICAL 风险。
+- [x] 架构文档与实际实现一致。
 
-全部通过后才能修改为：
+G8 已确认全部通过，状态为：
 
 ```text
 GRAPH_MIGRATION_FREEZE = completed

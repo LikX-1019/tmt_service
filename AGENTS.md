@@ -2,7 +2,9 @@
 
 本规则适用于 `tmt_service` 仓库内所有代码修改、重构、测试、迁移和架构调整。
 
-当前项目处于 **Agent Graph Migration Freeze** 阶段。
+AgentGraph Migration 已完成：G8 验收通过，`GRAPH_MIGRATION_FREEZE = completed`，
+普通功能开发已恢复。架构不变量继续保留：客服 workflow 只能由共享 AgentGraph 编排，
+Channel / API / Service 不得恢复业务决策。
 
 开发目标不是单纯“让功能跑通”，而是：
 
@@ -15,7 +17,7 @@
 当多个规则、文档或任务要求发生冲突时，按以下优先级执行：
 
 1. 平台级安全、数据安全和系统指令。
-2. 本文件中的架构不变量与 Agent Graph Migration Freeze。
+2. 本文件中的架构不变量与迁移完成后的现行约束。
 3. `docs/AGENT_GRAPH_MIGRATION.md`。
 
    * 该文档是迁移阶段、状态、步骤、验收证据的唯一 Source of Truth。
@@ -62,48 +64,43 @@ ConsoleRuntime._evaluate_batch_legacy()
 
 ---
 
-# 3. Agent Graph Migration Freeze
+# 3. Agent Graph Migration 状态与现行约束
 
-当前处于：
+当前状态：
 
 ```text
-Agent Graph Migration Freeze
+GRAPH_MIGRATION_FREEZE = completed
+AgentGraph Migration = COMPLETED
 ```
 
-冻结期间，默认禁止开发与迁移无关的新客服业务能力。
+迁移已完成，G0-G8 全部 `COMPLETED`。验收证据见
+`docs/AGENT_GRAPH_G8_ACCEPTANCE.md`。普通客服功能开发已恢复，但必须继续满足以下
+架构不变量；违反架构不变量的任务即使测试通过也视为 FAIL。
 
-## 允许开发的内容
+## 开发必须遵守
 
-以下修改允许进行：
+* 新增客服业务能力时，业务决策进入 AgentGraph Node / Conditional Edge；
+* Channel / API / Facade 只做 request parsing、认证、transport、payload 适配、
+  session 映射、response presentation；
+* Node 读取 `AgentState`、返回 `StatePatch`，能力调用保持
+  `Node → Service / Repository / Tool`；
+* 高风险 deterministic rules 经 GuardNode 在 FAQ / 知识回答 / 商品生成 / 通用 LLM
+  之前运行；
+* 副作用经 PendingAction 与幂等检查点，`UNCERTAIN` 不自动重试；
+* 数据职责边界保持：PostgreSQL 商品事实、MySQL 客服业务事实、Milvus 知识向量、
+  Checkpoint Workflow Runtime。
 
-* AgentGraph 迁移；
-* AgentState / Runtime 的迁移工作；
-* 将 Legacy Workflow 迁入 AgentGraph；
-* 删除旧 orchestrator 中已经迁移的逻辑；
-* 为迁移必需的 adapter；
-* 为迁移必需的 compatibility layer；
-* 修复 AgentGraph 迁移引入的 regression；
-* 迁移相关测试；
-* 迁移相关日志和 observability；
-* 迁移相关文档；
-* 数据正确性问题；
-* 安全问题；
-* 阻塞当前迁移阶段的必要 bugfix。
+## 仍然禁止
 
-## 禁止开发的内容
-
-禁止：
-
-* 新增与 AgentGraph 迁移无关的客服业务；
 * 新增独立 Workflow Engine；
 * 新增第二套 AgentGraph；
-* 新增第二套 AgentState；
-* 新增第二套 Runtime；
-* 新增长期存在的兼容 orchestrator；
-* 在 Legacy 层增加新的业务路由；
-* 为单独 Channel 建立业务 orchestrator；
+* 新增第二套 AgentState 或第二套 Graph State；
+* 新增第二套客服 Runtime；
+* 在 Legacy 层恢复或新增业务路由、orchestrator 或 runtime rollback switch；
+* 为单独 Channel 建立业务 orchestrator / Channel-specific Workflow；
 * 为临时需求绕开 AgentGraph；
-* 将本应进入 AgentGraph 的决策逻辑塞进 API / Service / Runtime。
+* 将本应进入 AgentGraph 的决策逻辑塞进 API / Service / Runtime；
+* 长期保留复制式兼容层，替代真正的迁移或实现。
 
 任何新的客服业务决策，默认都应该进入 AgentGraph。
 
@@ -536,10 +533,10 @@ Smallest Correct Change
 除非：
 
 * 当前修改无法安全实现；
-* 当前迁移阶段明确要求；
+* 架构不变量或当前任务明确要求；
 * 用户明确要求。
 
-尤其在 Migration Freeze 阶段，应优先：
+迁移阶段的做法是优先：
 
 ```text
 迁移旧逻辑
@@ -550,6 +547,8 @@ Smallest Correct Change
 ```text
 创建新的抽象层
 ```
+
+该原则在迁移完成后仍然成立：优先修改已有 AgentGraph 能力，而不是新增过渡抽象。
 
 ---
 
@@ -641,7 +640,7 @@ channel metadata
 
 # 16. 兼容层规则
 
-Migration 期间允许 Compatibility Layer，但必须满足：
+Compatibility Layer 仍允许存在，但必须满足：
 
 ```text
 Thin
@@ -661,8 +660,11 @@ Removable
 如果引入新的 compatibility abstraction，应明确：
 
 ```text
-迁移完成后由什么条件删除
+由什么条件删除
 ```
+
+Migration 已完成，因此新兼容层必须说明具体的删除触发条件，不得默认长期存在，也不得
+成为第二套 orchestrator、State 或 Service。
 
 ---
 
@@ -712,7 +714,7 @@ A → B → ChangedSymbol
 
 还必须检查：
 
-* 是否违反当前 Migration Phase；
+* 是否违反 AgentGraph 架构不变量（迁移已完成，不变量继续生效）；
 * 是否新增 Legacy Orchestrator 分支；
 * 是否产生第二套 State；
 * 是否产生第二套 Runtime；
@@ -883,25 +885,27 @@ detect-changes
 
 # 23. 新功能判断
 
-如果任务要求新增客服能力，在 Migration Freeze 阶段必须先判断：
+如果任务要求新增客服能力，必须先判断：
 
 ```text
-这个能力是否属于当前 AgentGraph Migration？
+这个能力应该由哪个 AgentGraph Node / Conditional Edge 表达？
 ```
 
-如果不是：
-
-默认不得新增。
-
-如果属于迁移范围：
-
-业务决策进入：
+如果实现计划把新的客服业务决策放在 API / Service / Runtime / Channel 层：
 
 ```text
-AgentGraph
+拒绝该实现方式，改为进入 AgentGraph
 ```
 
-入口层只负责调用。
+入口层只负责调用。迁移已经完成，不存在“先放 Legacy 层，之后再迁移”的例外。
+
+```text
+新增业务能力
+      ↓
+AgentGraph Node / Conditional Edge
+      ↓
+Service / Repository / Tool
+```
 
 ---
 
@@ -912,7 +916,7 @@ AgentGraph
 * AgentGraph topology；
 * AgentState contract；
 * Runtime boundary；
-* Legacy migration state；
+* Legacy orchestrator 残留状态；
 * migration acceptance criteria；
 
 必须同步检查：
@@ -940,7 +944,7 @@ docs/AGENT_GRAPH_MIGRATION.md
 
 ```text
 [ ] 阅读并遵循 AGENTS.md
-[ ] 确认当前 AgentGraph Migration Phase
+[ ] 确认 AgentGraph 架构不变量未被违反
 [ ] 检查 git status / branch / HEAD
 [ ] 用户原有 WIP 未被覆盖
 [ ] 修改目标 symbol 已运行 impact
@@ -952,7 +956,7 @@ docs/AGENT_GRAPH_MIGRATION.md
 [ ] 关键 affected-flow regression 通过
 [ ] detect-changes --scope all 已运行
 [ ] detect-changes 无未解释的重要风险
-[ ] Migration architecture invariant 通过
+[ ] AgentGraph architecture invariant 通过
 ```
 
 准备 Merge 时另外检查：
@@ -960,7 +964,7 @@ docs/AGENT_GRAPH_MIGRATION.md
 ```text
 [ ] detect-changes --scope compare 已运行
 [ ] 使用了正确 target branch
-[ ] Migration acceptance criteria 仍然满足
+[ ] Migration acceptance criteria 仍然满足（迁移已完成，不得回退）
 ```
 
 ---
@@ -972,7 +976,7 @@ docs/AGENT_GRAPH_MIGRATION.md
 ```text
 读取 AGENTS.md
         ↓
-读取 Migration 状态
+确认 AgentGraph 架构不变量
         ↓
 检查 Working Tree
         ↓
@@ -982,7 +986,7 @@ GitNexus Query / Context
         ↓
 GitNexus Impact
         ↓
-确认 Migration Boundary
+确认 Graph Boundary
         ↓
 选择最小合规实现
         ↓
@@ -1080,8 +1084,8 @@ rules 必须经 GuardNode 在知识回答、商品生成和通用 LLM 之前运�
 
 # 29. Migration Acceptance 与文档同步
 
-只有 `docs/AGENT_GRAPH_MIGRATION.md` 中的所有验收证据齐全，才能把
-`GRAPH_MIGRATION_FREEZE` 改为 `completed`。至少包括：
+AgentGraph Migration 已完成：`GRAPH_MIGRATION_FREEZE = completed`，验收证据见
+`docs/AGENT_GRAPH_G8_ACCEPTANCE.md`。该验收至少覆盖：
 
 1. `/api/v1/chat` 和 PDD 都经 AgentRuntime 进入 AgentGraph。
 2. `ChatService` 不再承担业务 workflow，`ConsoleRuntime` 不再承担 AI workflow。
@@ -1093,9 +1097,11 @@ rules 必须经 GuardNode 在知识回答、商品生成和通用 LLM 之前运�
 7. tests、Ruff、architecture checks 和 GitNexus change analysis 通过，无未解释风险。
 8. 架构文档与实际实现一致。
 
-修改涉及 AgentGraph topology、AgentState contract、Runtime boundary、Legacy migration
-state 或 migration acceptance criteria 时，必须同步检查迁移文档。只有实现证据真实变化时
-才更新其状态，不得把 Planned 描述成 Implemented，也不得仅因测试通过就解除 Freeze。
+修改涉及 AgentGraph topology、AgentState contract、Runtime boundary 或迁移验收结论时，
+必须同步检查迁移文档与 `docs/AGENT_GRAPH_G8_ACCEPTANCE.md`。历史阶段证据保持历史事实，
+不得重写；当前态文档必须与实际实现一致，不得把 Planned 描述成 Implemented。
+
+Freeze 已解除，但 Freeze 期间建立的架构不变量继续生效，不得因为“迁移结束”而放松。
 
 ---
 

@@ -75,9 +75,11 @@ Facade，`ConsoleRuntime` 只保留渠道、Connector、发送队列和发送结
 ### Migration Status
 
 项目处于 **Phase 2 — Unified Agent Graph Migration**，
-`GRAPH_MIGRATION_FREEZE = active`。G6 已删除 Legacy AI 编排和 runtime rollback
-switch；G7 完成架构清理。阶段计划和 G8 验收条件以
-`docs/AGENT_GRAPH_MIGRATION.md` 为准。
+`GRAPH_MIGRATION_FREEZE = completed`。G6 已删除 Legacy AI 编排和 runtime rollback
+switch；G7 完成架构清理；G8 完成全量迁移验收并解除 Freeze。Freeze 解除后架构不变量继续
+有效：`AgentState` / `StatePatch` 仍是唯一 Graph State Contract，Checkpoint 仍必须对齐
+Node lifecycle。阶段计划以 `docs/AGENT_GRAPH_MIGRATION.md` 为准，验收证据见
+`docs/AGENT_GRAPH_G8_ACCEPTANCE.md`。
 
 ### Implemented
 
