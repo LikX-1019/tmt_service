@@ -41,7 +41,9 @@ def rule_result_to_patch(
                 None,
             ),
             "guard_rule_names": [
-                decision.rule_name for decision in result.decisions if decision.rule_name
+                decision.rule_name
+                for decision in result.decisions
+                if decision.rule_name
             ],
         },
         intent=primary.reason_code or primary.rule_name if primary else None,
@@ -94,12 +96,16 @@ def qa_result_to_patch(result: QAResult, *, next_node: str) -> StatePatch:
             bm25_score=item.bm25_score,
             fusion_score=item.fusion_score,
             rerank_score=item.rerank_score,
+            metadata=item.metadata,
         )
         for item in result.trace_documents
     ]
-    top_score = max(
-        (item.rerank_score for item in candidates if item.rerank_score is not None),
-        default=None,
+    scores = [item.rerank_score for item in candidates]
+    top_score = scores[0] if scores else None
+    score_margin = (
+        top_score - scores[1]
+        if top_score is not None and len(scores) > 1 and scores[1] is not None
+        else top_score
     )
     counts = result.retrieval_counts
     patch = StatePatch(
@@ -112,6 +118,7 @@ def qa_result_to_patch(result: QAResult, *, next_node: str) -> StatePatch:
             fusion_count=max(0, counts.get("fusion", 0)),
             rerank_count=max(0, counts.get("rerank", 0)),
             top_score=top_score,
+            score_margin=score_margin,
             evidence_sufficient=result.route == "rag" and bool(candidates),
         ),
         evidence=candidates,

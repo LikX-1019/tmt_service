@@ -5,10 +5,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.agent.dependencies import AgentCapabilities
+from app.agent.constants import PRODUCT_LOAD_NODE, RAG_CONTEXT_NODE
 from app.agent.state import (
     AgentProductCandidateState,
     AgentReplyState,
     AgentState,
+    HumanState,
     ProductReference,
     ProductResolutionState,
     ResolvedProductContext,
@@ -85,6 +87,61 @@ def _terminal_product_patch(
     )
 
 
+def _pdd_product_handoff_patch(
+    state: AgentState,
+    *,
+    answer: str,
+    reason_code: str,
+) -> StatePatch:
+    """把 PDD Legacy 商品安全失败表达为 Graph Human workflow。"""
+    turn = state.turn
+    product_id = (
+        state.session.current_product.product_id
+        if state.session and state.session.current_product
+        else None
+    )
+    product_name = next(
+        (
+            item.product_name
+            for item in turn.product.recent_products
+            if item.product_id == product_id
+        ),
+        None,
+    ) if turn else None
+    return StatePatch(
+        product=ProductResolutionState(
+            reference=turn.product.reference if turn else None,
+            recent_products=turn.product.recent_products if turn else [],
+            status="failed" if product_id else "missing",
+            resolution_source="conversation" if product_id else "none",
+            requires_product=True,
+            product_rule_name=turn.product.product_rule_name if turn else None,
+            answer_required=False,
+            error_code=reason_code,
+        ),
+        route="human",
+        risk_level="high",
+        risk_reasons=[reason_code],
+        final_answer=answer,
+        human=HumanState(
+            required=True,
+            status="requested",
+            reason_code=reason_code,
+            reason=answer,
+        ),
+        reply=AgentReplyState(
+            source="product",
+            route="human",
+            answer=answer,
+            product_id=product_id,
+            product_name=product_name,
+            product_resolution="conversation" if product_id else "none",
+            reason_code=reason_code,
+        ),
+        next_node="human_transfer",
+    )
+
+
 class ProductResolveNode:
     """调用 ProductResolver / SemanticProductResolver，控制商品分支。"""
 
@@ -97,6 +154,35 @@ class ProductResolveNode:
             raise ValueError("ProductResolveNode 前必须完成 hydration")
 
         recent = _refs(state)
+        if session.channel == "pdd":
+            if session.current_product is None:
+                if turn.product.requires_product:
+                    return _pdd_product_handoff_patch(
+                        state,
+                        answer="商品咨询缺少可确认的商品卡片",
+                        reason_code="PRODUCT_CONTEXT_MISSING",
+                    )
+                return StatePatch(
+                    product=ProductResolutionState(
+                        recent_products=turn.product.recent_products,
+                        status="not_required",
+                        requires_product=False,
+                    ),
+                    next_node=RAG_CONTEXT_NODE,
+                )
+            return StatePatch(
+                current_product=session.current_product,
+                product=ProductResolutionState(
+                    reference=session.current_product,
+                    recent_products=turn.product.recent_products,
+                    status="pending",
+                    resolution_source="conversation",
+                    requires_product=True,
+                    product_rule_name=turn.product.product_rule_name,
+                    answer_required=True,
+                ),
+                next_node=PRODUCT_LOAD_NODE,
+            )
         request_product_id = (
             turn.product.reference.product_id
             if turn.product.reference is not None
@@ -287,6 +373,12 @@ class ProductLoadNode:
                 reference.product_id
             )
         except ProductNotFoundError:
+            if session.channel == "pdd":
+                return _pdd_product_handoff_patch(
+                    state,
+                    answer="商品资料不可用或与会话商品不一致",
+                    reason_code="PRODUCT_DATA_MISSING",
+                )
             if (
                 turn.product.reference is not None
                 and turn.product.reference.source == "manual"
@@ -324,9 +416,19 @@ class ProductLoadNode:
                 resolution_source=turn.product.resolution_source,
             )
         except ProductLookupError as exc:
+            if session.channel == "pdd":
+                return _pdd_product_handoff_patch(
+                    state,
+                    answer="商品资料不可用或与会话商品不一致",
+                    reason_code="PRODUCT_DATA_MISSING",
+                )
             raise ProductServiceUnavailableError() from exc
 
-        if state.conversation_id and self._capabilities.conversations is not None:
+        if (
+            session.channel != "pdd"
+            and state.conversation_id
+            and self._capabilities.conversations is not None
+        ):
             await self._capabilities.conversations.bind_product(
                 state.conversation_id,
                 product_id=product.id,
@@ -392,8 +494,20 @@ class ProductAnswerNode:
                 conversation_id=state.conversation_id,
             )
         except AppException:
+            if state.session and state.session.channel == "pdd":
+                return _pdd_product_handoff_patch(
+                    state,
+                    answer="商品咨询暂无法安全回答，已转人工",
+                    reason_code="PRODUCT_ANSWER_UNAVAILABLE",
+                )
             raise
         except Exception as exc:
+            if state.session and state.session.channel == "pdd":
+                return _pdd_product_handoff_patch(
+                    state,
+                    answer="商品咨询暂无法安全回答，已转人工",
+                    reason_code="PRODUCT_ANSWER_UNAVAILABLE",
+                )
             raise LLMInvocationError() from exc
         context = turn.product.context
         return StatePatch(
@@ -408,6 +522,11 @@ class ProductAnswerNode:
                 product_resolution=turn.product.resolution_source,
                 rule_name=turn.product.product_rule_name,
                 confidence=result.confidence,
+                facts_supported=result.facts_supported,
+                contains_sensitive_or_after_sales=(
+                    result.contains_sensitive_or_after_sales
+                ),
+                needs_clarification=result.needs_clarification,
             ),
             next_node="response",
         )

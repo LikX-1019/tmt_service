@@ -33,6 +33,9 @@ class AgentCapabilities:
     conversations: Any | None = None
     messages: Any | None = None
     products: Any | None = None
+    greeting_agent: Any | None = None
+    greeting_config_loader: Any | None = None
+    pdd_router: Any | None = None
 
 
 def default_capabilities() -> AgentCapabilities:

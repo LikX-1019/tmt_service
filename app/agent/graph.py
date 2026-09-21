@@ -19,6 +19,10 @@ from app.agent.constants import (
     PRODUCT_ANSWER_NODE,
     PRODUCT_LOAD_NODE,
     PRODUCT_RESOLVE_NODE,
+    PDD_GREETING_NODE,
+    PDD_HANDOFF_NODE,
+    PDD_INTENT_NODE,
+    PDD_RAG_NODE,
     RAG_CONTEXT_NODE,
     RESPONSE_NODE,
     SESSION_HYDRATE_NODE,
@@ -42,6 +46,12 @@ from app.agent.nodes.human_transfer import HumanTransferNode
 from app.agent.nodes.response import ResponseNode
 from app.agent.nodes.session import SessionHydrateNode
 from app.agent.nodes.social import SocialNode
+from app.agent.nodes.pdd import (
+    PDDGreetingNode,
+    PDDHandoffNode,
+    PDDIntentNode,
+    PDDRAGNode,
+)
 from app.agent.protocols import (
     AgentGraphError,
     AgentGraphExecutionError,
@@ -144,6 +154,10 @@ def build_unified_chat_graph(
     builder: StateGraph = StateGraph(AgentState)
     nodes = {
         SESSION_HYDRATE_NODE: SessionHydrateNode(caps),
+        PDD_HANDOFF_NODE: PDDHandoffNode(caps),
+        PDD_GREETING_NODE: PDDGreetingNode(caps),
+        PDD_INTENT_NODE: PDDIntentNode(caps),
+        PDD_RAG_NODE: PDDRAGNode(caps),
         FAQ_EXACT_NODE: FAQNode(caps),
         GUARD_NODE: GuardNode(caps),
         SOCIAL_NODE: SocialNode(caps),
@@ -166,11 +180,43 @@ def build_unified_chat_graph(
         route_graph_entry,
         {name: name for name in nodes},
     )
-    builder.add_edge("session_hydrate", "faq_exact")
+    builder.add_conditional_edges(
+        SESSION_HYDRATE_NODE,
+        lambda state: "pdd" if state.session.channel == "pdd" else "unified",
+        {
+            "pdd": PDD_HANDOFF_NODE,
+            "unified": FAQ_EXACT_NODE,
+        },
+    )
+    builder.add_conditional_edges(
+        PDD_HANDOFF_NODE,
+        lambda state: "human" if state.context.get("pdd_handoff") else "greeting",
+        {"human": HUMAN_TRANSFER_NODE, "greeting": PDD_GREETING_NODE},
+    )
+    builder.add_conditional_edges(
+        PDD_GREETING_NODE,
+        lambda state: (
+            "response" if state.context.get("pdd_greeting_hit") is True else SOCIAL_NODE
+        ),
+        {RESPONSE_NODE: RESPONSE_NODE, SOCIAL_NODE: SOCIAL_NODE},
+    )
+    builder.add_conditional_edges(
+        PDD_INTENT_NODE,
+        lambda state: "product" if state.turn.product.requires_product else "knowledge",
+        {
+            "product": PRODUCT_RESOLVE_NODE,
+            "knowledge": PDD_RAG_NODE,
+        },
+    )
+    builder.add_edge(PDD_RAG_NODE, RESPONSE_NODE)
     builder.add_conditional_edges(
         "faq_exact",
         after_faq,
-        {RESPONSE_NODE: RESPONSE_NODE, GUARD_NODE: GUARD_NODE},
+        {
+            RESPONSE_NODE: RESPONSE_NODE,
+            PDD_INTENT_NODE: PDD_INTENT_NODE,
+            GUARD_NODE: GUARD_NODE,
+        },
     )
     builder.add_conditional_edges(
         "guard",
@@ -184,12 +230,17 @@ def build_unified_chat_graph(
     builder.add_conditional_edges(
         "social",
         after_social,
-        {RESPONSE_NODE: RESPONSE_NODE, PRODUCT_RESOLVE_NODE: PRODUCT_RESOLVE_NODE},
+        {
+            RESPONSE_NODE: RESPONSE_NODE,
+            PRODUCT_RESOLVE_NODE: PRODUCT_RESOLVE_NODE,
+            FAQ_EXACT_NODE: FAQ_EXACT_NODE,
+        },
     )
     builder.add_conditional_edges(
         "product_resolve",
         after_product_resolve,
         {
+            HUMAN_TRANSFER_NODE: HUMAN_TRANSFER_NODE,
             RESPONSE_NODE: RESPONSE_NODE,
             PRODUCT_LOAD_NODE: PRODUCT_LOAD_NODE,
             RAG_CONTEXT_NODE: RAG_CONTEXT_NODE,
@@ -200,6 +251,7 @@ def build_unified_chat_graph(
         "product_load",
         after_product_load,
         {
+            HUMAN_TRANSFER_NODE: HUMAN_TRANSFER_NODE,
             PRODUCT_ANSWER_NODE: PRODUCT_ANSWER_NODE,
             RAG_CONTEXT_NODE: RAG_CONTEXT_NODE,
             FALLBACK_NODE: FALLBACK_NODE,
@@ -207,7 +259,18 @@ def build_unified_chat_graph(
         },
     )
     builder.add_edge(RAG_CONTEXT_NODE, FALLBACK_NODE)
-    builder.add_edge("product_answer", "response")
+    builder.add_conditional_edges(
+        PRODUCT_ANSWER_NODE,
+        lambda state: (
+            HUMAN_TRANSFER_NODE
+            if state.turn is not None and state.turn.human.required
+            else RESPONSE_NODE
+        ),
+        {
+            HUMAN_TRANSFER_NODE: HUMAN_TRANSFER_NODE,
+            RESPONSE_NODE: RESPONSE_NODE,
+        },
+    )
     builder.add_conditional_edges(
         "fallback",
         after_fallback,

@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 SESSION_HYDRATE_NODE = "session_hydrate"
+PDD_HANDOFF_NODE = "pdd_handoff"
+PDD_GREETING_NODE = "pdd_greeting"
+PDD_INTENT_NODE = "pdd_intent"
+PDD_RAG_NODE = "pdd_rag"
 FAQ_EXACT_NODE = "faq_exact"
 GUARD_NODE = "guard"
 SOCIAL_NODE = "social"
@@ -17,6 +21,10 @@ RESPONSE_NODE = "response"
 RESUMABLE_GRAPH_NODES = frozenset(
     {
         SESSION_HYDRATE_NODE,
+        PDD_HANDOFF_NODE,
+        PDD_GREETING_NODE,
+        PDD_INTENT_NODE,
+        PDD_RAG_NODE,
         FAQ_EXACT_NODE,
         GUARD_NODE,
         SOCIAL_NODE,
@@ -35,6 +43,10 @@ __all__ = [
     "FALLBACK_NODE",
     "GUARD_NODE",
     "HUMAN_TRANSFER_NODE",
+    "PDD_GREETING_NODE",
+    "PDD_HANDOFF_NODE",
+    "PDD_INTENT_NODE",
+    "PDD_RAG_NODE",
     "PRODUCT_ANSWER_NODE",
     "PRODUCT_LOAD_NODE",
     "PRODUCT_RESOLVE_NODE",

@@ -115,6 +115,10 @@ def test_topology_contains_all_active_nodes_and_resume_allowlist_matches():
         "fallback",
         "human_transfer",
         "response",
+        "pdd_handoff",
+        "pdd_greeting",
+        "pdd_intent",
+        "pdd_rag",
         "__end__",
     }
     assert expected == set(graph.nodes)

@@ -9,6 +9,12 @@ from app.agent.nodes.product import (
     ProductLoadNode,
     ProductResolveNode,
 )
+from app.agent.nodes.pdd import (
+    PDDGreetingNode,
+    PDDHandoffNode,
+    PDDIntentNode,
+    PDDRAGNode,
+)
 from app.agent.nodes.response import ResponseNode, response_node
 from app.agent.nodes.session import SessionHydrateNode, session_hydrate_node
 from app.agent.nodes.social import SocialNode, social_node
@@ -18,6 +24,10 @@ __all__ = [
     "FallbackNode",
     "GuardNode",
     "HumanTransferNode",
+    "PDDGreetingNode",
+    "PDDHandoffNode",
+    "PDDIntentNode",
+    "PDDRAGNode",
     "ProductAnswerNode",
     "ProductLoadNode",
     "ProductResolveNode",

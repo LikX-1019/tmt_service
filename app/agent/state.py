@@ -72,6 +72,7 @@ ChatRoute = Literal[
     "product_not_found",
     "product_link_invalid",
     "product_link_unsupported",
+    "error",
 ]
 RiskLevel = Literal["low", "medium", "high"]
 ServiceStage = Literal["pre_sale", "post_sale", "general"]
@@ -509,6 +510,11 @@ class AgentReplyState(BaseModel):
     confidence: float | None = Field(default=None, ge=0, le=1)
     qa_hit: bool | None = None
     sources: list[AgentSourceState] = Field(default_factory=list)
+    greeting_type: str | None = None
+    recognition_source: Literal["rule", "llm"] | None = None
+    facts_supported: bool | None = None
+    contains_sensitive_or_after_sales: bool | None = None
+    needs_clarification: bool | None = None
 
 
 class StatePatch(BaseModel):

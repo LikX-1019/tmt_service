@@ -12,7 +12,9 @@ G2A = COMPLETED
 G2B = COMPLETED
 G3 = COMPLETED
 G4 = COMPLETED
-G5 = NOT_STARTED
+G5 = IN_PROGRESS
+G5A = COMPLETED
+G5B = NOT_STARTED
 PLAN_VERSION = 1
 BASELINE_DATE = 2026-09-20
 ```
@@ -196,6 +198,7 @@ G2B cutover evidence lives in `docs/AGENT_GRAPH_G2B_CUTOVER.md`. Summary:
 
 G3 durable checkpoint evidence lives in `docs/AGENT_GRAPH_G3_CHECKPOINT.md`.
 G4 hardening evidence lives in `docs/AGENT_GRAPH_G4_HARDENING.md`.
+G5A PDD graph parity evidence lives in `docs/AGENT_GRAPH_G5A_PARITY.md`.
 
 ### Phase G3 — StatePatch + Node Checkpoint Integration
 
@@ -221,7 +224,7 @@ Guard is channel-neutral, and node names share one registry.
 
 | Item | Boundary |
 |---|---|
-| Status | `NOT_STARTED` |
+| Status | `COMPLETED` |
 | Goal | Unified Chat 的全部主要业务步骤由业务级 Graph Node 表达。 |
 | Scope | Graph business hardening / residual decomposition; subgraph cleanup; remove transitional compatibility; prepare Shared Agent capabilities for PDD reuse. |
 | Prohibited | 重复 G2 的 Unified Chat initial migration；把 ProductResolver、SemanticProductResolver、QAService、RuleRegistry、ContextualFallbackService 的实现复制进 Node；借机新增 Tool、Memory 或 Intent 业务。 |
@@ -233,13 +236,25 @@ Guard is channel-neutral, and node names share one registry.
 
 | Item | Boundary |
 |---|---|
-| Status | `NOT_STARTED` |
+| Status | `IN_PROGRESS` (`G5A = COMPLETED`, `G5B = NOT_STARTED`) |
 | Goal | PDD AI 决策迁移到同一 AgentRuntime/AgentGraph，ConsoleRuntime 不再拥有独立客服推理链。 |
 | Scope | BrowserMessage Channel Adapter、AgentResult 到 AutoReplyPolicy 的映射、OutboundJob、SendWorker、Connector 生命周期。 |
 | Prohibited | 在 `_evaluate_batch()` 继续新增 handoff/greeting/social/FAQ/product/RAG/policy 分支；绕过 AutoReplyPolicy 直接发送；造成重复回复或人工态误发送。 |
 | Tests | PDD multiroute characterization；greeting/social/FAQ/product/handoff behavior tests；outbound idempotency tests；connector failure tests。 |
 | Acceptance | PDD 与 Customer Demo 共享 AgentRuntime；`_evaluate_batch()` 不承担 AI workflow；发送队列结果和渠道状态仍由 ConsoleRuntime 管理。 |
 | Rollback | 可切回 PDD legacy adapter，但不得长期保留双推理链。 |
+
+G5A established a PDD BrowserMessage/Conversation/Shop adapter, explicit PDD
+invocation of the shared `AgentRuntime` and `AgentGraph`, typed PDD business nodes,
+and a Graph-output-to-channel-policy mapper. Legacy-vs-Graph parity tests cover
+greeting, social, complaint/refund handoff, current explicit-human behavior, FAQ,
+product answers and product failures, RAG, insufficient knowledge, and unavailable
+knowledge. `AutoReplyPolicy`, persistence, outbound jobs, the send worker, connector
+status, and human-takeover persistence remain outside the Graph.
+
+G5A does not switch production: `ConsoleRuntime._evaluate_batch()` remains the PDD
+production path. **G5B: READY** to perform the controlled production adapter cutover
+and retain all channel-side persistence/send semantics.
 
 ### Phase G6 — Remove Duplicate Orchestration
 

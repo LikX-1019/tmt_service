@@ -55,13 +55,21 @@ class SessionHydrateNode:
             raise ValueError("session.session_id 与 conversation_id 不一致")
 
         binding = None
-        if state.conversation_id and self._capabilities.conversations is not None:
+        if (
+            session.channel != "pdd"
+            and state.conversation_id
+            and self._capabilities.conversations is not None
+        ):
             binding = await self._capabilities.conversations.get_binding(
                 state.conversation_id
             )
 
         recent_turns: list[RecentTurnState] = []
-        if state.conversation_id and self._capabilities.messages is not None:
+        if (
+            session.channel != "pdd"
+            and state.conversation_id
+            and self._capabilities.messages is not None
+        ):
             history = await self._capabilities.messages.list_recent_turns(
                 state.conversation_id,
                 limit=session.short_term_memory.max_recent_messages,
@@ -81,7 +89,9 @@ class SessionHydrateNode:
         patch = StatePatch(
             context={"session_hydrated": True},
             recent_turns=recent_turns,
-            next_node="faq_exact",
+            next_node=(
+                "pdd_handoff" if session.channel == "pdd" else "faq_exact"
+            ),
         )
         if binding is not None and binding.product_id:
             patch.current_product = ProductReference(

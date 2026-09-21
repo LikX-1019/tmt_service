@@ -21,12 +21,16 @@ class SocialNode:
         has_binding = session.current_product is not None
         explicit_product = turn.product.reference is not None
         requires_product = turn.product.requires_product
-        if has_binding or explicit_product or requires_product:
+        if session.channel != "pdd" and (
+            has_binding or explicit_product or requires_product
+        ):
             return StatePatch(context={"social_hit": False}, next_node="product_resolve")
-
         decision = await self._social_router.classify(turn.original_query)
         if decision.intent == "other" or decision.response is None:
-            return StatePatch(context={"social_hit": False}, next_node="product_resolve")
+            return StatePatch(
+                context={"social_hit": False},
+                next_node="faq_exact" if session.channel == "pdd" else "product_resolve",
+            )
 
         return StatePatch(
             context={"social_hit": True},
