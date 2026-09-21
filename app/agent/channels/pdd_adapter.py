@@ -406,16 +406,25 @@ async def invoke_pdd_agent(
     batch: Sequence[BrowserMessage],
     goods_id: str | None = None,
     goods_name: str | None = None,
+    conversation: Mapping[str, Any] | None = None,
+    shop: Mapping[str, Any] | None = None,
 ) -> AgentState:
-    """显式 PDD Graph 调用入口；G5A 不接入 ConsoleRuntime。"""
-    state = pdd_messages_to_agent_state(
-        conversation_id=conversation_id,
-        shop_id=shop_id,
-        customer_id=customer_id,
-        batch=batch,
-        goods_id=goods_id,
-        goods_name=goods_name,
-    )
+    """显式 PDD Graph 调用入口；生产由 ConsoleRuntime 的 adapter 调用。"""
+    if conversation is not None and shop is not None:
+        state = pdd_context_to_agent_state(
+            batch=batch,
+            conversation=conversation,
+            shop=shop,
+        )
+    else:
+        state = pdd_messages_to_agent_state(
+            conversation_id=conversation_id,
+            shop_id=shop_id,
+            customer_id=customer_id,
+            batch=batch,
+            goods_id=goods_id,
+            goods_name=goods_name,
+        )
     return await runtime.invoke(state)
 
 

@@ -3,12 +3,11 @@
 ## Result
 
 ```text
-G5 = IN_PROGRESS
+G5 = COMPLETED
 G5A = COMPLETED
-G5B = NOT_STARTED
+G5B = COMPLETED
 GRAPH_MIGRATION_FREEZE = active
-PRODUCTION_CUTOVER = NO
-G5B = READY
+PRODUCTION_CUTOVER = YES
 ```
 
 ## Adapter And Graph Reuse
@@ -51,8 +50,9 @@ G5A deliberately preserves the current PDD behavior where the Legacy router does
 route a plain explicit-human request through its pre-FAQ handoff predicate. Changing
 that order is not part of behavior-preserving G5A.
 
-## G5B Entry
+## G5B Follow-up
 
-G5B is READY. It may connect the PDD production adapter to AgentRuntime while keeping
-AutoReplyPolicy, decision persistence, outbound jobs, send workers, connector status,
-and human-takeover persistence in ConsoleRuntime. G5A does not begin that cutover.
+G5B connected the PDD production adapter to AgentRuntime while keeping AutoReplyPolicy,
+decision persistence, outbound jobs, send workers, connector status, and human-takeover
+persistence in ConsoleRuntime. The implementation and side-effect evidence are recorded
+in `docs/AGENT_GRAPH_G5B_CUTOVER.md`.

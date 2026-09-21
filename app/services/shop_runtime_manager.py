@@ -9,6 +9,13 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from app.agent.checkpoint import FileCheckpointStore
+from app.agent.coordinator import StateCoordinator
+from app.agent.dependencies import AgentCapabilities
+from app.agent.graph import build_unified_chat_graph
+from app.agent.routing import CustomerServiceRouter
+from app.agent.runtime import AgentRuntime
+from app.agent.service import CustomerServiceAgent
 from app.core.config import Settings, get_settings
 from app.core.logging import create_log_task
 from app.core.exceptions import (
@@ -20,8 +27,18 @@ from app.core.exceptions import (
 from app.integrations.pdd.base import ConnectorStatus, CustomerServiceConnector, ShopIdentity
 from app.integrations.pdd.playwright_connector import PddPlaywrightConnector
 from app.repositories.console_repository import ConsoleRepository
+from app.repositories.product_repository import ProductRepository
+from app.rules.registry import default_rule_registry
 from app.services.console_runtime import ConsoleRuntime, QAProvider
+from app.services.contextual_fallback_service import ContextualFallbackService
 from app.services.event_broker import EventBroker
+from app.services.product_resolver import ProductResolver
+from app.services.product_service import (
+    HttpProductClient,
+    ProductAnswerService,
+)
+from app.services.semantic_product_resolver import SemanticProductResolver
+from app.services.social_router import SocialRouter
 
 
 logger = logging.getLogger(__name__)
@@ -48,6 +65,39 @@ class ShopRuntimeManager:
         self._restart_tasks: dict[str, asyncio.Task[None]] = {}
         self._lock = asyncio.Lock()
         self._initialized = False
+        self._pdd_agent_runtime = self._build_pdd_agent_runtime()
+
+    async def _load_pdd_greeting_config(self, shop_id: str | None) -> dict[str, Any]:
+        """Load greeting configuration for the PDD Graph without channel orchestration."""
+        if not shop_id:
+            return {
+                "enabled": True,
+                "trigger_groups": {},
+                "reply_templates": {},
+            }
+        return await self.repository.get_greeting_config(shop_id)
+
+    def _build_pdd_agent_runtime(self) -> AgentRuntime:
+        """Compose the shared business Graph used by every PDD shop runtime."""
+        product_provider = ProductRepository(HttpProductClient(self.settings))
+        capabilities = AgentCapabilities(
+            rules=default_rule_registry(),
+            social_router=SocialRouter(),
+            product_resolver=ProductResolver(self.settings),
+            semantic_products=SemanticProductResolver(),
+            product_answers=ProductAnswerService(),
+            fallbacks=ContextualFallbackService(),
+            qa_provider=self._qa_provider,
+            products=product_provider,
+            greeting_agent=CustomerServiceAgent(),
+            greeting_config_loader=self._load_pdd_greeting_config,
+            pdd_router=CustomerServiceRouter(),
+        )
+        coordinator = StateCoordinator(FileCheckpointStore())
+        return AgentRuntime(
+            build_unified_chat_graph(capabilities, coordinator=coordinator),
+            coordinator=coordinator,
+        )
 
     def _profile_path(self, shop: dict[str, Any]) -> Path:
         if shop.get("browser_profile_key") == "legacy":
@@ -85,6 +135,7 @@ class ShopRuntimeManager:
             broker=self.broker,
             identity_handler=identity_handler,
             runtime_status_handler=status_handler,
+            pdd_agent_runtime=self._pdd_agent_runtime,
         )
 
     def _schedule_restart(self, shop_id: str) -> None:

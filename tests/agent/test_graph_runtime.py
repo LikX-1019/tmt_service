@@ -240,8 +240,9 @@ def test_runtime_satisfies_agent_node_contract() -> None:
     assert isinstance(ResponseNode(), AgentNode)
 
 
-def test_pdd_production_path_does_not_reference_unified_graph_runtime() -> None:
-    """G2B 只切 Unified Chat；PDD production 不得引用 Unified Graph Runtime。"""
+def test_pdd_production_path_uses_injected_agent_runtime() -> None:
+    """G5B PDD production enters the shared graph through an injected runtime."""
     source = Path("app/services/console_runtime.py").read_text(encoding="utf-8")
-    assert "AgentRuntime" not in source
-    assert "build_unified_chat_graph" not in source
+    assert "AgentRuntime" in source
+    assert "pdd_agent_runtime" in source
+    assert "invoke_pdd_agent" in source

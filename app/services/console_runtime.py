@@ -10,6 +10,12 @@ from hashlib import sha256
 from typing import Any, Awaitable, Callable
 
 from app.agent.greeting import default_reply_templates, default_trigger_groups
+from app.agent.channels.pdd_adapter import (
+    PDDChannelDecision,
+    evaluate_pdd_channel_policy,
+    invoke_pdd_agent,
+)
+from app.agent.runtime import AgentRuntime
 from app.agent.routing import CustomerServiceRouter
 from app.agent.service import CustomerContext, CustomerServiceAgent
 from app.core.config import Settings, get_settings
@@ -81,6 +87,7 @@ class ConsoleRuntime:
         broker: EventBroker | None = None,
         identity_handler: IdentityHandler | None = None,
         runtime_status_handler: RuntimeStatusHandler | None = None,
+        pdd_agent_runtime: AgentRuntime | None = None,
     ) -> None:
         self._repository = repository
         self._connector = connector
@@ -96,6 +103,14 @@ class ConsoleRuntime:
         self._shop_id = shop_id
         self._identity_handler = identity_handler
         self._runtime_status_handler = runtime_status_handler
+        self._pdd_agent_runtime = pdd_agent_runtime
+        # Directly constructed test/embedding runtimes predate the composition-root
+        # injection. Production always injects the graph runtime from ShopRuntimeManager.
+        self._pdd_runtime_mode = (
+            self._settings.pdd_agent_runtime
+            if pdd_agent_runtime is not None
+            else "legacy"
+        )
         self._shop: dict[str, Any] | None = None
         self._initialized = False
         self._init_lock = asyncio.Lock()
@@ -396,6 +411,147 @@ class ConsoleRuntime:
                 self._debounces.pop(conversation_id, None)
 
     async def _evaluate_batch(
+        self, conversation_id: str, batch: list[BrowserMessage]
+    ) -> None:
+        if self._pdd_runtime_mode == "graph":
+            await self._evaluate_batch_graph(conversation_id, batch)
+            return
+        await self._evaluate_batch_legacy(conversation_id, batch)
+
+    async def _evaluate_batch_graph(
+        self, conversation_id: str, batch: list[BrowserMessage]
+    ) -> None:
+        """Run PDD AI decisions through the injected shared Agent Graph."""
+        conversation = await self._repository.get_conversation(
+            conversation_id, self._shop_id
+        )
+        if conversation is None:
+            return
+        assert self._shop is not None
+        shop = await self._repository.get_shop(self._shop["id"])
+        status = await self._connector.status()
+        allow_auto = bool(
+            shop
+            and shop["global_auto_reply_enabled"]
+            and (
+                shop["reception_mode"] == "guarded_auto"
+                or self._legacy_single_shop_mode
+            )
+            and conversation["auto_reply_enabled"]
+            and status.status == ConnectorStatus.READY
+        )
+        query = "\n".join(message.content or "" for message in batch[-5:]).strip()
+        batch_key = sha256("|".join(message.fingerprint for message in batch).encode()).hexdigest()
+        blockers: list[str] = []
+        if not shop or not shop["global_auto_reply_enabled"]:
+            blockers.append("全局自动接待未开启")
+        if not self._legacy_single_shop_mode and (
+            not shop or shop["reception_mode"] != "guarded_auto"
+        ):
+            blockers.append("当前为人机协同模式")
+        if not conversation["auto_reply_enabled"]:
+            blockers.append("当前会话为人工接待")
+        if status.status != ConnectorStatus.READY:
+            blockers.append("拼多多连接器未就绪")
+
+        assert self._pdd_agent_runtime is not None
+        try:
+            state = await invoke_pdd_agent(
+                self._pdd_agent_runtime,
+                conversation_id=conversation_id,
+                shop_id=str(shop["id"]) if shop else "",
+                customer_id=str(conversation.get("customer_id") or "") or None,
+                batch=batch,
+                goods_id=str(conversation.get("goods_id") or "") or None,
+                goods_name=str(conversation.get("goods_name") or "") or None,
+                conversation=conversation,
+                shop=shop,
+            )
+            handoff = await self._repository.get_handoff_config(str(shop["id"]))
+            policy = evaluate_pdd_channel_policy(
+                state,
+                conversation,
+                allow_auto=allow_auto,
+                auto_reply_policy=self._policy,
+                product_answer_service=self._product_answer_service,
+                settings=self._settings,
+                auto_reply_blockers=blockers,
+                handoff_reply=str(handoff["reply_template"]),
+            )
+        except Exception:
+            # A graph failure is terminal for this batch. Never re-run Legacy AI,
+            # which could duplicate model calls or side effects.
+            logger.exception(
+                "pdd_agent_graph_failed",
+                extra={"event": "pdd_agent_graph_failed"},
+            )
+            policy = PDDChannelDecision(
+                route="error",
+                action="suggest",
+                answer=None,
+                reason="Agent Graph 暂不可用，已生成人工建议",
+                reason_code="AGENT_GRAPH_UNAVAILABLE",
+            )
+
+        if policy.action == "handoff":
+            await self._handoff(
+                conversation_id=conversation_id,
+                shop_id=str(shop["id"]) if shop else "",
+                batch_key=batch_key,
+                reason=policy.reason or "当前问题已转人工处理",
+                send_reply=bool(policy.answer),
+                product_id=policy.product_id,
+                product_name=policy.product_name,
+            )
+            if policy.reason_code:
+                await self._record_knowledge_gap(
+                    query,
+                    conversation=conversation,
+                    reason_code=policy.reason_code,
+                )
+            return
+
+        decision_payload = {
+            "batch_key": batch_key,
+            "route": policy.route,
+            "action": policy.action,
+            "qa_code": policy.qa_code,
+            "product_id": policy.product_id,
+            "product_name": policy.product_name,
+            "greeting_type": policy.greeting_type,
+            "recognition_source": policy.recognition_source,
+            "top_score": policy.top_score,
+            "score_margin": policy.score_margin,
+            "risk_reason": policy.reason,
+            "suggested_answer": policy.answer,
+            "policy_version": self._settings.auto_reply_policy_version,
+        }
+        decision = await self._repository.add_decision(
+            conversation_id, decision_payload, shop_id=self._shop_id
+        )
+        if policy.reason_code in KNOWLEDGE_GAP_REASON_CODES or policy.reason_code in {
+            "PRODUCT_DATA_MISSING",
+            "PRODUCT_CONTEXT_MISSING",
+            "AGENT_GRAPH_UNAVAILABLE",
+        }:
+            await self._record_knowledge_gap(
+                query,
+                conversation=conversation,
+                reason_code=policy.reason_code or "fallback",
+            )
+        await self._emit("reply.decision", {**decision, "conversation_id": conversation_id})
+        if decision.get("action") == "auto_send" and decision.get("suggested_answer"):
+            job, created = await self._repository.create_outbound_job(
+                conversation_id,
+                client_request_id=f"auto:{batch_key[:59]}",
+                source="auto",
+                content=str(decision["suggested_answer"])[:400],
+            )
+            if created:
+                await self._emit("outbound.updated", job)
+                self._send_queue.put_nowait(str(job["id"]))
+
+    async def _evaluate_batch_legacy(
         self, conversation_id: str, batch: list[BrowserMessage]
     ) -> None:
         conversation = await self._repository.get_conversation(

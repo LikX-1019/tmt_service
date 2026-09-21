@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     )
     # TEMPORARY MIGRATION SWITCH: legacy is emergency rollback only, remove in G6.
     unified_chat_runtime: Literal["graph", "legacy"] = "graph"
+    # TEMPORARY MIGRATION SWITCH: legacy is emergency PDD rollback only, remove in G6.
+    pdd_agent_runtime: Literal["graph", "legacy"] = "graph"
     sqlalchemy_database_url: str | None = Field(
         default=None,
         validation_alias="DATABASE_URL",

@@ -44,12 +44,13 @@ AgentState
     ↓
 ChatService
     ↓
-ChatService._route_chat()
+AgentRuntime → Unified Chat AgentGraph
 ```
 
-`ChatService` 目前仍承担主要编排，调用 RuleRegistry、SocialRouter、ProductResolver、
-ProductRepository、ProductAnswerService、QAService 和 ContextualFallbackService。
-PDD 当前则由 `ConsoleRuntime._evaluate_batch()` 承担另一套程序式 AI/业务编排。
+生产 `ChatService` 通过 AgentRuntime 进入 Unified Chat AgentGraph；
+`ChatService._route_chat()` 仅保留为显式 `UNIFIED_CHAT_RUNTIME=legacy` 回滚路径。
+PDD 默认同样通过 `ConsoleRuntime` 的 PDD Channel Adapter 进入共享 AgentRuntime/
+AgentGraph；PDD 的 AutoReplyPolicy、持久化和发送仍由 ConsoleRuntime 管理。
 
 `ChatStateRuntime` 是旁路 recorder 和恢复契约：它创建 AgentState、记录 Rule、
 Product、QA、完成和失败状态，并执行粗粒度 `chat_turn` 检查点，但不决定业务路由。
@@ -80,7 +81,8 @@ Unified Chat 与 PDD 最终共享同一个 AgentRuntime 和 AgentGraph。Node �
 和回滚边界以 `docs/AGENT_GRAPH_MIGRATION.md` 为准。
 G2B 已完成 Unified Chat 生产切流：生产 `/api/v1/chat` 通过 ChatService Facade 进入
 AgentRuntime 和 Unified Chat AgentGraph。`_route_chat()` 只保留为显式 `legacy`
-回滚路径。PDD 仍使用 ConsoleRuntime。
+回滚路径。G5B 已完成 PDD 默认 Graph 切流；PDD legacy 仅保留为显式回滚，G6
+再删除重复编排。
 
 ### Implemented
 
@@ -101,13 +103,17 @@ AgentRuntime 和 Unified Chat AgentGraph。`_route_chat()` 只保留为显式 `l
 
 ### Runtime Boundary
 
-- `ChatService` 仍负责稳定的 `MySQL binding hydrate → QA exact → RuleRegistry →
-  SocialRouter → ProductResolver/ProductRepository → fallback QA context` 业务顺序。
+- `ChatService` 生产路径只负责请求/响应适配和 Graph 生命周期；旧的
+  `MySQL binding hydrate → QA exact → RuleRegistry → SocialRouter →
+  ProductResolver/ProductRepository → fallback QA context` 顺序只在显式 legacy
+  回滚中保留。
 - `ChatStateRuntime` 是旁路运行记录和恢复契约，不参与业务决策，也不替代 MySQL 或
   PostgreSQL-backed product API。
 - 每个 HTTP 请求创建新 `run_id` / `turn_id`；相同 `conversation_id` 复用 `session_id`，但不复用上一轮商品事实快照。
 - 下一轮商品追问仍通过 MySQL binding 得到 `product_id`，并重新读取 PostgreSQL 商品资料。
-- Unified Chat production uses AgentGraph; PDD still uses ConsoleRuntime.
+- Unified Chat and PDD production use the shared AgentRuntime/AgentGraph contract;
+  PDD ConsoleRuntime remains the channel policy, persistence, queue, and connector
+  boundary.
 - 每个 Unified Chat production Graph Node lifecycle 由 StateCoordinator durable
   checkpoint：before / after / failed。
 - StateCoordinator 拥有 Node lifecycle；AgentRuntime 可从 actual next/failed node

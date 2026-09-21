@@ -12,9 +12,9 @@ G2A = COMPLETED
 G2B = COMPLETED
 G3 = COMPLETED
 G4 = COMPLETED
-G5 = IN_PROGRESS
+G5 = COMPLETED
 G5A = COMPLETED
-G5B = NOT_STARTED
+G5B = COMPLETED
 PLAN_VERSION = 1
 BASELINE_DATE = 2026-09-20
 ```
@@ -46,9 +46,11 @@ PDD BrowserMessage
     ↓
 ConsoleRuntime._on_message()
     ↓
-ConsoleRuntime._evaluate_batch()
+ConsoleRuntime._evaluate_batch()  [Graph default; legacy rollback only]
     ↓
-另一套程序式 handoff / greeting / social / FAQ / product / RAG / policy 编排
+PDD Channel Adapter → AgentRuntime → shared AgentGraph
+    ↓
+ConsoleRuntime channel policy / persistence / send queue
 ```
 
 GitNexus 当前调用关系确认：
@@ -64,7 +66,8 @@ After G2B, `_route_chat()` remains only as the temporary frozen rollback path fo
 已有迁移基础包括 `AgentState`、`ChatSessionState`、`ChatTurnState`、`StatePatch`、
 `StateCoordinator`、`FileCheckpointStore`、`ChatStateRuntime` 和 PendingAction
 安全语义。G1 已引入 LangGraph，`AgentRuntime` 和最小可执行 StateGraph 骨架，
-G2B 已将生产 Unified Chat 切到 Unified Chat AgentGraph；PDD 仍走 ConsoleRuntime。
+G2B 已将生产 Unified Chat 切到 Unified Chat AgentGraph；G5B 已将 PDD 默认路径切到同一套
+AgentRuntime/AgentGraph，legacy 仅保留为 G6 前的显式回滚开关。
 
 ## Target Architecture
 
@@ -236,7 +239,7 @@ Guard is channel-neutral, and node names share one registry.
 
 | Item | Boundary |
 |---|---|
-| Status | `IN_PROGRESS` (`G5A = COMPLETED`, `G5B = NOT_STARTED`) |
+| Status | `COMPLETED` (`G5A = COMPLETED`, `G5B = COMPLETED`) |
 | Goal | PDD AI 决策迁移到同一 AgentRuntime/AgentGraph，ConsoleRuntime 不再拥有独立客服推理链。 |
 | Scope | BrowserMessage Channel Adapter、AgentResult 到 AutoReplyPolicy 的映射、OutboundJob、SendWorker、Connector 生命周期。 |
 | Prohibited | 在 `_evaluate_batch()` 继续新增 handoff/greeting/social/FAQ/product/RAG/policy 分支；绕过 AutoReplyPolicy 直接发送；造成重复回复或人工态误发送。 |
@@ -252,9 +255,12 @@ product answers and product failures, RAG, insufficient knowledge, and unavailab
 knowledge. `AutoReplyPolicy`, persistence, outbound jobs, the send worker, connector
 status, and human-takeover persistence remain outside the Graph.
 
-G5A does not switch production: `ConsoleRuntime._evaluate_batch()` remains the PDD
-production path. **G5B: READY** to perform the controlled production adapter cutover
-and retain all channel-side persistence/send semantics.
+G5B completed the controlled production adapter cutover. `ShopRuntimeManager` composes
+one durable PDD `AgentRuntime`/shared business Graph and explicitly injects it into
+each `ConsoleRuntime`. The default is `PDD_AGENT_RUNTIME=graph`; `legacy` is an
+explicit emergency rollback only. Graph exceptions become a suggest-only decision and
+never invoke the Legacy AI path. See `docs/AGENT_GRAPH_G5B_CUTOVER.md` for the
+implementation and validation evidence.
 
 ### Phase G6 — Remove Duplicate Orchestration
 
@@ -342,14 +348,14 @@ Memory Store 是能力层，不是 Graph 本身。
 解除 Freeze 前必须逐项勾选并附证据：
 
 - [ ] `/api/v1/chat` → AgentRuntime → AgentGraph。
-- [ ] PDD → Channel Adapter → AgentRuntime → AgentGraph。
+- [x] PDD → Channel Adapter → AgentRuntime → AgentGraph。
 - [ ] `ChatService` 不再承担业务 workflow。
 - [ ] `ConsoleRuntime` 不再承担 AI workflow。
 - [x] Guard、Social、Product、FAQ、RAG、Fallback、Human、Response 主要业务步骤由 Graph Node 表达。
 - [ ] 主要业务分支由 Conditional Edge 表达。
 - [x] StatePatch 是 Node 状态更新机制。
 - [x] Checkpoint 与 Node execution 对齐。
-- [ ] Customer Demo 与 PDD 共享相同 Agent Runtime。
+- [x] Customer Demo 与 PDD 共享相同 Agent Runtime/AgentGraph contract。
 - [ ] 旧 orchestrator 已删除或降级为薄 adapter。
 - [ ] 完整测试通过；skipped 项均有外部原因。
 - [ ] Ruff 通过。
