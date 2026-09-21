@@ -7,7 +7,6 @@ from typing import Any
 from langgraph.graph.state import CompiledStateGraph
 
 from app.agent.coordinator import StateCoordinator
-from app.agent.graph import build_agent_graph
 from app.agent.protocols import (
     AgentGraphError,
     AgentGraphExecutionError,
@@ -21,11 +20,11 @@ class AgentRuntime:
 
     def __init__(
         self,
-        graph: CompiledStateGraph | None = None,
+        graph: CompiledStateGraph,
         coordinator: StateCoordinator | None = None,
     ) -> None:
-        """生产传入 durable coordinator；测试可省略以保留 in-memory mode。"""
-        self._graph = graph or build_agent_graph()
+        """生产必须显式传入编译后的共享 AgentGraph。"""
+        self._graph = graph
         self._coordinator = coordinator
 
     async def invoke(self, state: AgentState) -> AgentState:

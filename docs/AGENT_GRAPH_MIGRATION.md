@@ -16,6 +16,7 @@ G5 = COMPLETED
 G5A = COMPLETED
 G5B = COMPLETED
 G6 = COMPLETED
+G7 = COMPLETED
 PLAN_VERSION = 1
 BASELINE_DATE = 2026-09-20
 ```
@@ -143,7 +144,7 @@ G0 基线结果见 `docs/AGENT_GRAPH_G0_BASELINE.md`。要点：
 
 | Item | Boundary |
 |---|---|
-| Status | `NOT_STARTED` |
+| Status | `COMPLETED` |
 | Goal | 实现 AgentRuntime 和可执行 AgentGraph 骨架，打通 START → hydrate → guard → continue → response → END。 |
 | Scope | `app/agent/`、Graph runtime wiring、最小 Node/Edge、编译/调用协议；用 feature flag 或测试入口验证，不切生产主路径。 |
 | Prohibited | 把 Product/QA/PDD 全量逻辑搬进 Node；新增业务规则；替换生产 Unified Chat 或 PDD 路径。 |
@@ -296,6 +297,16 @@ G6 legacy removal evidence lives in `docs/AGENT_GRAPH_G6_LEGACY_REMOVAL.md`. Sum
 | Tests | `uv run pytest -q`、`uv run ruff check .`、GitNexus change analysis、关键 integration/E2E。 |
 | Acceptance | 无未解释 HIGH/CRITICAL 风险；文档、类型、注释与运行时一致；完整测试通过。 |
 | Rollback | 清理项按独立 commit 回滚，不影响已迁移主链路。 |
+
+G7 cleanup evidence lives in `docs/AGENT_GRAPH_G7_CLEANUP.md`. Summary:
+
+* Removed unused Legacy state recorder methods and duplicate state mapping helpers.
+* Removed the empty `ChatStateRuntime.start()` lifecycle and unused coordinator parameter.
+* Made `AgentRuntime` require an explicitly compiled shared AgentGraph.
+* Removed the unused ConsoleRuntime QA provider dependency.
+* Renamed remaining transition identifiers without changing runtime behavior.
+* Synchronized current architecture documentation.
+* Preserved SendWorker, `_send_job`, AutoReplyPolicy, persistence, outbound, and checkpoint semantics.
 
 ### Phase G8 — Migration Acceptance
 

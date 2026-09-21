@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -26,10 +26,11 @@ from app.core.exceptions import (
 )
 from app.integrations.pdd.base import ConnectorStatus, CustomerServiceConnector, ShopIdentity
 from app.integrations.pdd.playwright_connector import PddPlaywrightConnector
+from app.qa.service import QAService
 from app.repositories.console_repository import ConsoleRepository
 from app.repositories.product_repository import ProductRepository
 from app.rules.registry import default_rule_registry
-from app.services.console_runtime import ConsoleRuntime, QAProvider
+from app.services.console_runtime import ConsoleRuntime
 from app.services.contextual_fallback_service import ContextualFallbackService
 from app.services.event_broker import EventBroker
 from app.services.product_resolver import ProductResolver
@@ -42,6 +43,7 @@ from app.services.social_router import SocialRouter
 
 
 logger = logging.getLogger(__name__)
+QAProvider = Callable[[], Awaitable[QAService]]
 ConnectorFactory = Callable[[dict[str, Any], int], CustomerServiceConnector]
 
 
@@ -129,7 +131,6 @@ class ShopRuntimeManager:
         return ConsoleRuntime(
             self.repository,
             self._connector_factory(shop, slot),
-            self._qa_provider,
             self.settings,
             shop_id=shop_id,
             broker=self.broker,
@@ -266,7 +267,7 @@ class ShopRuntimeManager:
         await runtime.ensure_initialized()
         return runtime
 
-    async def legacy_runtime(self) -> ConsoleRuntime:
+    async def sole_active_runtime(self) -> ConsoleRuntime:
         shops = [
             shop
             for shop in await self.repository.list_shops(include_disabled=False)

@@ -1,8 +1,8 @@
 # State Contract v2
 
 本文定义客服 Agent 的可序列化状态契约。当前仓库已经实现 State Contract v2 的模型、
-序列化、文件检查点、恢复协调和 PendingAction 安全语义，并已将最小 State Runtime
-接入 `POST /api/v1/chat`。Unified Chat 的多轮商品事实仍以 `conversation_id` 和 MySQL
+序列化、文件检查点、恢复协调和 PendingAction 安全语义，并将 Unified Chat 与 PDD
+生产路径接入共享 AgentGraph。Unified Chat 的多轮商品事实仍以 `conversation_id` 和 MySQL
 `chat_conversation_products` 为持久化绑定来源；Checkpoint 只负责单次 Turn 恢复。
 
 ## 1. 核心原则
@@ -42,20 +42,19 @@ AgentState
 ```text
 /api/v1/chat
     ↓
-ChatService
+ChatService facade
     ↓
-AgentRuntime → Unified Chat AgentGraph
+AgentRuntime → shared AgentGraph
 ```
 
-生产 `ChatService` 通过 AgentRuntime 进入 Unified Chat AgentGraph；
-`ChatService._route_chat()` 仅保留为显式 `UNIFIED_CHAT_RUNTIME=legacy` 回滚路径。
-PDD 默认同样通过 `ConsoleRuntime` 的 PDD Channel Adapter 进入共享 AgentRuntime/
-AgentGraph；PDD 的 AutoReplyPolicy、持久化和发送仍由 ConsoleRuntime 管理。
+PDD BrowserMessage 通过 `ConsoleRuntime` 和 PDD Channel Adapter 进入同一个
+`AgentRuntime → shared AgentGraph`。PDD 的 AutoReplyPolicy、持久化和发送仍由
+ConsoleRuntime 管理。
 
-`ChatStateRuntime` 是旁路 recorder 和恢复契约：它创建 AgentState、记录 Rule、
-Product、QA、完成和失败状态，并执行粗粒度 `chat_turn` 检查点，但不决定业务路由。
+`ChatStateRuntime` 只创建 Unified Chat 的 AgentState，并在 transport 层记录完成或
+失败结果；Node lifecycle checkpoint 由 `StateCoordinator` 与 `AgentRuntime` 拥有。
 
-### Target Runtime
+### Runtime Contract
 
 ```text
 Channel / API
@@ -69,20 +68,16 @@ Node / Conditional Edge
 Service / Repository / Tool
 ```
 
-Unified Chat 与 PDD 最终共享同一个 AgentRuntime 和 AgentGraph。Node 通过
-`StatePatch` 更新 State，Checkpoint 与真实 Node 生命周期对齐。`ChatService` 最终
-降级为 Facade，`ConsoleRuntime` 最终只保留渠道、Connector、发送队列和发送结果
-职责。
+Unified Chat 与 PDD 共享同一个 AgentRuntime 和 AgentGraph。Node 通过
+`StatePatch` 更新 State，Checkpoint 与真实 Node 生命周期对齐。`ChatService` 是
+Facade，`ConsoleRuntime` 只保留渠道、Connector、发送队列和发送结果职责。
 
 ### Migration Status
 
 项目处于 **Phase 2 — Unified Agent Graph Migration**，
-`GRAPH_MIGRATION_FREEZE = active`。Agent Graph 尚未完全接管；阶段计划、验收条件
-和回滚边界以 `docs/AGENT_GRAPH_MIGRATION.md` 为准。
-G2B 已完成 Unified Chat 生产切流：生产 `/api/v1/chat` 通过 ChatService Facade 进入
-AgentRuntime 和 Unified Chat AgentGraph。`_route_chat()` 只保留为显式 `legacy`
-回滚路径。G5B 已完成 PDD 默认 Graph 切流；PDD legacy 仅保留为显式回滚，G6
-再删除重复编排。
+`GRAPH_MIGRATION_FREEZE = active`。G6 已删除 Legacy AI 编排和 runtime rollback
+switch；G7 完成架构清理。阶段计划和 G8 验收条件以
+`docs/AGENT_GRAPH_MIGRATION.md` 为准。
 
 ### Implemented
 
@@ -93,22 +88,18 @@ AgentRuntime 和 Unified Chat AgentGraph。`_route_chat()` 只保留为显式 `l
 - `StateCoordinator` 节点前后检查点、retryable failure resume、running node resume 和 pending action safety。
 - `PendingAction` 在 `EXECUTING` 或 `UNCERTAIN` 恢复时转人工，避免重复发送、重复退款或重复取消订单。
 - `/api/v1/chat` 每次请求创建独立 `AgentState`、`ChatSessionState` 和 `ChatTurnState`。
-- `ChatStateRuntime` 记录 Rule、Product、QA、完成和失败状态，并执行粗粒度 `chat_turn` 检查点。
+- `ChatStateRuntime` 创建请求 State，并只在 transport 层记录完成或失败结果。
 - MySQL conversation-product binding hydrate Session 商品引用；PostgreSQL 商品事实只进入当前 Turn。
 - 成功 Turn 在 completed checkpoint 写入后清理文件；失败或中断 checkpoint 保留用于恢复。
-- `AgentRuntime` 和 LangGraph StateGraph skeleton 可执行 `START → session_hydrate →
-  guard → response → END`；Node 返回 `StatePatch` 并通过 `AgentState.apply_patch` 合并。
-- `AgentReplyState`、有界历史/商品引用状态和 Unified Chat FAQ/Guard/Social/Product/
-  Fallback Graph path 已实现，并通过 Legacy parity 测试。
+- `AgentRuntime` 必须显式注入编译后的共享 AgentGraph；Node 返回 `StatePatch`
+  并通过 `AgentState.apply_patch` 合并。
+- Unified Chat / PDD 的 FAQ、Guard、Social、Product、RAG、Fallback、Human 和
+  Response 业务路径已由共享 AgentGraph 表达。
 
 ### Runtime Boundary
 
-- `ChatService` 生产路径只负责请求/响应适配和 Graph 生命周期；旧的
-  `MySQL binding hydrate → QA exact → RuleRegistry → SocialRouter →
-  ProductResolver/ProductRepository → fallback QA context` 顺序只在显式 legacy
-  回滚中保留。
-- `ChatStateRuntime` 是旁路运行记录和恢复契约，不参与业务决策，也不替代 MySQL 或
-  PostgreSQL-backed product API。
+- `ChatService` 生产路径只负责请求/响应适配、消息持久化和 Graph 调用。
+- `ChatStateRuntime` 不参与业务决策，也不替代 MySQL 或 PostgreSQL-backed product API。
 - 每个 HTTP 请求创建新 `run_id` / `turn_id`；相同 `conversation_id` 复用 `session_id`，但不复用上一轮商品事实快照。
 - 下一轮商品追问仍通过 MySQL binding 得到 `product_id`，并重新读取 PostgreSQL 商品资料。
 - Unified Chat and PDD production use the shared AgentRuntime/AgentGraph contract;
@@ -118,7 +109,7 @@ AgentRuntime 和 Unified Chat AgentGraph。`_route_chat()` 只保留为显式 `l
   checkpoint：before / after / failed。
 - StateCoordinator 拥有 Node lifecycle；AgentRuntime 可从 actual next/failed node
   显式恢复，但没有 automatic startup recovery。
-- Legacy rollback 仍保留粗粒度 `chat_turn` checkpoint。
+- Historical `chat_turn` checkpoint 读取时保持安全的人工处理语义。
 - Explicit nodes: SessionHydrate、FAQ、Guard、Social、ProductResolve、ProductLoad、
   ProductAnswer、RAGContext、Fallback、HumanTransfer、Response。
 - Tools and Memory are not implemented; standalone IntentNode remains a future
@@ -126,12 +117,10 @@ AgentRuntime 和 Unified Chat AgentGraph。`_route_chat()` 只保留为显式 `l
 
 ### Planned For Graph Migration
 
-- Chat Runtime Integration。
 - Memory Store。
 - Context Builder / `LLMContextBuilder`。
 - Query Rewrite。
 - Tool Runtime。
-- Production Agent Graph takeover。
 
 ## 4. State Contract
 
@@ -290,28 +279,28 @@ AgentRuntime 和 Unified Chat AgentGraph。`_route_chat()` 只保留为显式 `l
 
 ## 5. 商品上下文流
 
-当前 `/api/v1/chat` 的第一阶段 State Runtime 路径是：
+当前 `/api/v1/chat` 的商品上下文路径是：
 
 ```text
 POST /api/v1/chat
         ↓
 Create AgentState / Session / Turn
         ↓
-initial + before:chat_turn checkpoint
+AgentRuntime → shared AgentGraph
         ↓
-ChatService + ChatStateRuntime recorder
+SessionHydrateNode
         ↓
-RuleRegistry
-        ↓
-ProductResolver
+FAQ exact / Guard / Social / ProductResolve
         ↓
 conversation_id + chat_conversation_products
         ↓
 product_id
         ↓
-PostgreSQL product_api_profiles
+ProductLoadNode
         ↓
-ProductAnswer
+PostgreSQL product facts
+        ↓
+ProductAnswerNode / ResolvedProductContext
         ↓
 completed checkpoint + cleanup
 ```
@@ -320,7 +309,7 @@ completed checkpoint + cleanup
 是 State Contract 中的运行时 `ProductReference`。两者都只应保存商品引用，不是商品事实的
 Source of Truth。
 
-后续完整 Agent Runtime 目标流程：
+未来 Memory / Context Builder 扩展流程：
 
 ```text
 User: “这个怎么使用？”

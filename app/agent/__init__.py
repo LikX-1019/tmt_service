@@ -3,7 +3,7 @@
 from app.agent.checkpoint import FileCheckpointStore
 from app.agent.chat_runtime import ChatStateRuntime
 from app.agent.coordinator import StateCoordinator
-from app.agent.graph import build_agent_graph
+from app.agent.graph import build_unified_chat_graph
 from app.agent.protocols import (
     AgentGraphError,
     AgentGraphExecutionError,
@@ -74,7 +74,7 @@ __all__ = [
     "ToolState",
     "WorkflowState",
     "WorkflowStatus",
-    "build_agent_graph",
+    "build_unified_chat_graph",
     "qa_result_to_patch",
     "rule_result_to_patch",
 ]

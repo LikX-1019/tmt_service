@@ -118,7 +118,6 @@ async def test_product_path_auto_sends_only_after_exact_qa_miss() -> None:
     runtime = ConsoleRuntime(
         repository,
         connector,
-        qa_provider,
         settings,
         product_answer_service=product_answers,
         agent_runtime=build_console_graph_runtime(
@@ -189,7 +188,6 @@ async def test_handoff_precedes_faq_and_keeps_conversation_manual() -> None:
     runtime = ConsoleRuntime(
         repository,
         connector,
-        qa_provider,
         settings,
         agent_runtime=build_console_graph_runtime(
             repository, qa_provider, settings, agent=OtherAgent()
@@ -261,7 +259,6 @@ async def test_exact_faq_prevents_product_and_rag_paths() -> None:
     runtime = ConsoleRuntime(
         repository,
         connector,
-        qa_provider,
         settings,
         agent_runtime=build_console_graph_runtime(
             repository,
@@ -313,7 +310,6 @@ async def test_product_question_without_goods_card_transfers_without_message() -
     runtime = ConsoleRuntime(
         repository,
         connector,
-        qa_provider,
         settings,
         agent_runtime=build_console_graph_runtime(
             repository,
@@ -367,7 +363,6 @@ async def test_social_expression_precedes_faq_and_rag() -> None:
     runtime = ConsoleRuntime(
         repository,
         connector,
-        qa_provider,
         settings,
         agent_runtime=build_console_graph_runtime(
             repository,

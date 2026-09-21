@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from typing import Any
-from dataclasses import replace
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -285,19 +284,10 @@ def build_unified_chat_graph(
         raise AgentGraphExecutionError("Agent StateGraph 编译失败") from exc
 
 
-def build_agent_graph(rule_registry: Any | None = None) -> CompiledStateGraph:
-    """兼容 G1 显式 Skeleton 构造入口。"""
-    capabilities = default_capabilities()
-    if rule_registry is not None:
-        capabilities = replace(capabilities, rules=rule_registry)
-    return build_unified_chat_graph(capabilities)
-
-
 __all__ = [
     "AgentGraphError",
     "AgentGraphExecutionError",
     "AgentNodeExecutionError",
     "GraphNodeAdapter",
-    "build_agent_graph",
     "build_unified_chat_graph",
 ]

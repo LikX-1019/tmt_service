@@ -7,22 +7,23 @@
 ```text
 POST /api/v1/chat
     ↓
+ChatService facade
+    ↓
 AgentRuntime
     ↓
-faq_exact
+shared AgentGraph
     ↓
-GuardNode
+FAQ Exact → GuardNode
     ↓
 RuleRegistry
 ```
 
-Production Unified Chat now reaches `RuleRegistry` through `AgentRuntime` and
-`GuardNode` after `faq_exact`. PDD currently still reaches a separate procedural
-decision chain through `ConsoleRuntime._evaluate_batch()`. FAQ-before-Guard is
-current compatibility behavior and remains tracked migration debt; it is not the
-final safety architecture.
+PDD reaches the shared AgentGraph through its Channel Adapter and uses the PDD
+handoff/greeting/intent branches before knowledge generation. Unified Chat's
+FAQ-before-Guard order is preserved compatibility behavior and remains a G8
+acceptance decision; G7 does not change it.
 
-### Target
+### Architecture Boundary
 
 ```text
 AgentGraph
@@ -37,19 +38,19 @@ Conditional Edge
 `RuleRegistry` remains an independent deterministic capability. The Graph decides
 when Guard runs and which path follows the rule result; individual rule patterns must
 not be absorbed into Graph Edge logic. High-risk human/complaint/after-sale rules
-must become a front Guard before knowledge answer, product generation, and generic
-LLM fallback, but only after behavior-preserving tests are in place.
+must precede knowledge answer, product generation, and generic LLM fallback unless
+a characterized exact-match exception is explicitly accepted in G8.
 
-The rule layer is a deterministic safety and context gate in the current unified chat path:
+The rule layer is a deterministic safety and context gate in the Unified Chat Graph:
 
 ```text
 POST /api/v1/chat
         ↓
-ChatService
+ChatService facade
         ↓
-RuleRegistry
+AgentRuntime → AgentGraph
         ↓
-Rule evaluation
+GuardNode → RuleRegistry
         ↓
 Terminal?
 ```
@@ -64,7 +65,8 @@ It is not a replacement for Intent or RAG:
 
 - It does not call an LLM, database, Tool, PDD connector, or FastAPI request object.
 - It does not send a customer message or perform a transfer.
-- It only returns a serializable decision. `ChatService` consumes that decision and decides whether to return a fixed reply, route to human, continue to Product Resolution, or fall through to QA.
+- It only returns a serializable decision. `GuardNode` maps it to `StatePatch`;
+  conditional edges choose fixed reply, human, product, or knowledge paths.
 - The same message and `RuleContext` always produce the same result.
 
 This keeps low-latency, high-certainty behavior ahead of PostgreSQL product lookup and QA/RAG retrieval.
@@ -73,7 +75,7 @@ This keeps low-latency, high-certainty behavior ahead of PostgreSQL product look
 
 | Kind | Behavior | v1 rules |
 | --- | --- | --- |
-| Terminal | A match resolves this turn before Product Resolution and QA/RAG. `ChatService` returns the fixed reply / route and does not call product answer or QA. | `HumanHandoffRule`, `ComplaintRule`, `AfterSaleRiskRule`, `GreetingRule`, `CourtesyRule` |
+| Terminal | A match resolves this turn before Product Resolution and QA/RAG. Conditional edges route the fixed reply or human outcome without calling product answer or QA. | `HumanHandoffRule`, `ComplaintRule`, `AfterSaleRiskRule`, `GreetingRule`, `CourtesyRule` |
 | Enrichment | A match adds context but does not resolve the turn. Product Resolution or QA can still run. | `ProductContextRule` |
 
 `RuleRegistry.evaluate()` collects all matched enrichment decisions first, then runs terminal rules by descending priority and stops at the first match. This ordering preserves product context even when a higher-priority risk rule eventually terminates the turn.
@@ -161,11 +163,11 @@ Use `default_rule_registry()` to build a fresh registry containing all v1 rules.
 ```text
 POST /api/v1/chat
       ↓
-ChatService
+ChatService facade
       ↓
-Normalize
+AgentRuntime → AgentGraph
       ↓
-RuleRegistry
+GuardNode → normalize → RuleRegistry
       │
       ├── Enrichment: Product Context
       ↓
@@ -193,7 +195,7 @@ Examples:
 - `你好，我要投诉` — complaint wins over greeting; terminal route is `human`.
 - `您好，我要人工` — human handoff wins over greeting; terminal route is `human`.
 - `这个不合适，我要退款` — product enrichment remains available while `AfterSaleRiskRule` terminates with `human`.
-- `这个怎么戴` — only product enrichment matches; no terminal decision, so `ChatService` can continue to product answer when a bound product exists.
+- `这个怎么戴` — only product enrichment matches; no terminal decision, so the Graph can continue to product answer when a bound product exists.
 - `谢谢，这个一天戴多久？` — neither courtesy nor greeting matches; the product question remains available.
 
 ### Refund action versus refund policy
@@ -216,13 +218,13 @@ Examples:
 - `这个怎么清洗？` requires product context because it contains an implicit product reference.
 - A message without a product question or bound product does not match.
 
-The rule does not persist product facts. In unified chat, `ChatService` uses the result to decide whether it should resolve a product ID and then ask PostgreSQL-backed product services for facts.
+The rule does not persist product facts. In unified chat, `ProductResolveNode` uses the result to resolve a product ID and then ask PostgreSQL-backed product services for facts.
 
 ## 9. Current scope and non-responsibilities
 
-This version intentionally does **not** implement database product detail queries, PostgreSQL repository access, Milvus retrieval, LLM generation, Tool execution, side effects, full Agent State, Checkpoint persistence, or Agent Graph orchestration.
+This version intentionally does **not** implement database product detail queries, PostgreSQL repository access, Milvus retrieval, LLM generation, Tool execution, side effects, full Agent State, or Checkpoint persistence.
 
-Rule Engine is the deterministic decision layer. Product facts belong to PostgreSQL-backed services, QA/RAG evidence belongs to `QAService` and Milvus/BM25 retrieval, and runtime workflow state belongs to the State Contract / Checkpoint infrastructure.
+Rule Engine is the deterministic decision layer. Product facts belong to PostgreSQL-backed services, QA/RAG evidence belongs to `QAService` and Milvus/BM25 retrieval, and AgentGraph orchestrates the workflow through State Contract nodes and conditional edges.
 
 ## 10. Guard channel context
 

@@ -7,7 +7,7 @@ from app.agent.state import AgentReplyState, AgentState, StatePatch
 
 
 class SocialNode:
-    """仅在 Legacy 相同条件下调用 SocialRouter.classify。"""
+    """仅在 Graph social 分支条件内调用 SocialRouter.classify。"""
 
     def __init__(self, capabilities: AgentCapabilities) -> None:
         self._social_router = capabilities.social_router

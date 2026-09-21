@@ -48,24 +48,17 @@ AgentGraph
 
 收敛。
 
-禁止因为“实现方便”继续向 Legacy Orchestrator 添加业务能力。
+禁止因为“实现方便”在 ChatService、ConsoleRuntime、API 或 Service 层恢复客服业务编排。
 
-当前受保护的 Legacy Orchestrator 包括：
+G6 已删除的 Legacy Orchestrator 包括：
 
 ```text
 ChatService._route_chat()
-ConsoleRuntime._evaluate_batch()
+ConsoleRuntime._evaluate_batch_legacy()
 ```
 
-它们只能被：
-
-* 削弱；
-* 拆解；
-* 迁移；
-* 变薄；
-* 替换；
-
-不得继续扩张。
+不得恢复、重建等价分支或重新引入 runtime rollback switch。客服业务决策只能进入
+共享 AgentGraph。
 
 ---
 
@@ -116,16 +109,16 @@ Agent Graph Migration Freeze
 
 ---
 
-# 4. Legacy Orchestrator 禁止扩张
+# 4. Legacy Orchestrator 复活禁止
 
-以下方法属于迁移期间重点保护区域：
+以下方法已在 G6 删除：
 
 ```text
 ChatService._route_chat()
-ConsoleRuntime._evaluate_batch()
+ConsoleRuntime._evaluate_batch_legacy()
 ```
 
-禁止在其中新增：
+禁止在 Facade、Channel Runtime、API dependency 或 Service 中恢复：
 
 * intent 判断；
 * FAQ 路由；
@@ -157,43 +150,16 @@ elif should_use_rag:
     ...
 ```
 
-这类决策应该进入 AgentGraph 或对应的 AgentGraph Node。
-
-## Legacy Orchestrator 允许修改
-
-仅允许：
-
-* 删除旧逻辑；
-* 把逻辑迁移到 AgentGraph；
-* 减少职责；
-* 调用 AgentGraph / AgentRuntime；
-* 参数适配；
-* 返回值适配；
-* 非业务型兼容处理；
-* 小范围 bugfix。
-
-最终目标应该接近：
+这类决策应该进入 AgentGraph 或对应的 AgentGraph Node。当前合法边界是：
 
 ```text
-Legacy Entry
+Channel / API
     ↓
-Input Adaptation
+Facade / Channel Adapter
     ↓
 AgentRuntime / AgentGraph
     ↓
-Output Adaptation
-```
-
-而不是：
-
-```text
-Legacy Entry
-    ↓
-大量业务判断
-    ↓
-部分 AgentGraph
-    ↓
-部分 Legacy Workflow
+Channel / API presentation
 ```
 
 ---

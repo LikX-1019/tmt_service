@@ -75,7 +75,6 @@ async def test_rule_greeting_config_is_immediate_and_respects_send_gates() -> No
     runtime = ConsoleRuntime(
         repository,
         connector,
-        qa_provider,
         settings,
         agent_runtime=build_console_graph_runtime(
             repository,

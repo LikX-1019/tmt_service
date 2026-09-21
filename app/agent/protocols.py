@@ -23,7 +23,7 @@ class AgentGraphError(RuntimeError):
         node_name: str | None = None,
         original_exception: BaseException | None = None,
     ) -> None:
-        """保留失败时最后已知状态，便于调用方记录和未来 G3 恢复。"""
+        """保留失败时最后已知状态，便于调用方记录和恢复。"""
         super().__init__(message)
         self.failed_state = failed_state
         self.node_name = node_name

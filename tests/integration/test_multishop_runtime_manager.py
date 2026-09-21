@@ -246,7 +246,7 @@ async def test_knowledge_gaps_aggregate_and_customer_notes_are_shop_scoped(repos
 
 
 @pytest.mark.asyncio
-async def test_legacy_runtime_requires_unambiguous_active_shop(repository):
+async def test_sole_active_runtime_requires_unambiguous_active_shop(repository):
     first = await repository.create_provisioning_shop(browser_profile_key="legacy-a")
     second = await repository.create_provisioning_shop(browser_profile_key="legacy-b")
     await repository.update_shop_state(first["id"], lifecycle_status="active")
@@ -266,6 +266,6 @@ async def test_legacy_runtime_requires_unambiguous_active_shop(repository):
         from app.core.exceptions import ShopContextRequiredError
 
         with pytest.raises(ShopContextRequiredError):
-            await manager.legacy_runtime()
+            await manager.sole_active_runtime()
     finally:
         await manager.close()

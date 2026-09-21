@@ -69,10 +69,7 @@ def get_chat_service() -> ChatService:
     )
     return ChatService(
         message_repository=messages,
-        state_runtime=ChatStateRuntime(
-            checkpoint_store,
-            coordinator=coordinator,
-        ),
+        state_runtime=ChatStateRuntime(checkpoint_store),
         agent_runtime=AgentRuntime(
             build_unified_chat_graph(capabilities, coordinator=coordinator),
             coordinator=coordinator,
@@ -110,30 +107,30 @@ async def get_qa_service() -> QAService:
 
 def get_shop_runtime_manager(
     request: Request,
-) -> ShopRuntimeManager | _LegacyRuntimeManager:
+) -> ShopRuntimeManager | _InjectedRuntimeManager:
     """返回应用生命周期持有的多店运行时管理器。"""
     manager = getattr(request.app.state, "shop_runtime_manager", None)
     if manager is not None:
         return manager
-    # 测试和旧嵌入方可继续注入单店 runtime。
+    # 测试和嵌入方可继续注入已构造的单店 runtime。
     runtime = getattr(request.app.state, "console_runtime", None)
     if runtime is not None:
-        return _LegacyRuntimeManager(runtime)
+        return _InjectedRuntimeManager(runtime)
     if getattr(request.app.state, "console_enabled", True) is False:
         raise ConsoleUnavailableError("客服控制台未启用")
     raise RuntimeError("店铺运行时尚未初始化")
 
 
 async def get_console_runtime(request: Request) -> ConsoleRuntime:
-    """旧无作用域接口：只有唯一 active 店铺时才允许推断。"""
+    """无 shop_id 兼容接口：只有唯一 active 店铺时才允许推断。"""
     manager = get_shop_runtime_manager(request)
-    if isinstance(manager, _LegacyRuntimeManager):
+    if isinstance(manager, _InjectedRuntimeManager):
         return manager.runtime
-    return await manager.legacy_runtime()
+    return await manager.sole_active_runtime()
 
 
-class _LegacyRuntimeManager:
-    """仅供现有测试覆盖旧依赖注入方式。"""
+class _InjectedRuntimeManager:
+    """适配测试或嵌入方注入的单店 runtime。"""
 
     def __init__(self, runtime: ConsoleRuntime) -> None:
         self.runtime = runtime

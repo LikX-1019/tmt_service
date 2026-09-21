@@ -4,12 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app.agent.chat_runtime import (
-    ChatStateRuntime,
-    product_profile_to_state_context,
-    product_reference_from_resolution,
-    retrieval_document_to_state_evidence,
-)
+from app.agent.chat_runtime import ChatStateRuntime
 from app.agent.checkpoint import FileCheckpointStore
 from app.agent.coordinator import StateCoordinator
 from app.agent.state import AgentState, WorkflowStatus
@@ -350,17 +345,13 @@ async def test_state_runtime_defers_checkpoint_ownership_to_agent_runtime(
         customer_id="u1",
         service_stage="pre_sale",
     )
-    runtime.hydrate_product_binding(state, "1001")
-    await runtime.start(state)
-
     restored = await StateCoordinator(store).load_for_resume(state.run_id)
 
     assert restored is None
     assert state.status == WorkflowStatus.READY
     assert state.next_node == "session_hydrate"
     assert state.session is not None
-    assert state.session.current_product is not None
-    assert state.session.current_product.product_id == "1001"
+    assert state.session.current_product is None
 
 
 async def test_completed_checkpoint_is_cleaned_up_by_default(tmp_path: Path) -> None:
@@ -377,28 +368,3 @@ async def test_completed_checkpoint_is_cleaned_up_by_default(tmp_path: Path) -> 
     assert store.reasons[-1] == "workflow_completed"
     assert all("chat_turn" not in reason for reason in store.reasons)
     assert list(tmp_path.glob("*.json")) == []
-
-
-async def test_state_mappers_are_explicit_and_tolerate_invalid_product_time() -> None:
-    request_reference = product_reference_from_resolution("p1", "request")
-    url_reference = product_reference_from_resolution("p1", "url")
-    binding_reference = product_reference_from_resolution("p1", "conversation")
-    context = product_profile_to_state_context(
-        ProductProfile(
-            id="p1",
-            name="商品",
-            summary="说明",
-            usage="整段用法",
-            updated_at="not-an-iso-time",
-        )
-    )
-    evidence = retrieval_document_to_state_evidence(
-        RetrievalDocument(chunk_id="chunk-only", content="证据")
-    )
-
-    assert request_reference.source == "customer_selected"
-    assert url_reference.source == "message_extraction"
-    assert binding_reference.source == "manual"
-    assert context.usage == ["整段用法"]
-    assert context.source_updated_at is None
-    assert evidence.document_id == "chunk-only"

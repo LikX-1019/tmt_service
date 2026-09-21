@@ -80,7 +80,6 @@ async def console_runtime(tmp_path):
     runtime = ConsoleRuntime(
         repository,
         connector,
-        lambda: None,
         settings,
         agent_runtime=StubAgentRuntime(),  # type: ignore[arg-type]
     )

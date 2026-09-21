@@ -86,7 +86,6 @@ class ChatService:
             service_stage=request.service_stage,
         )
         try:
-            await self._state_runtime.start(state)
             if self._messages is not None:
                 await self._messages.append_customer_message(
                     conversation_id, request.message

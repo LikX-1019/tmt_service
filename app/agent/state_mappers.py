@@ -1,4 +1,4 @@
-"""State Contract 的纯映射函数，供 Graph 与 Legacy recorder 共享。"""
+"""State Contract 的纯映射函数，供 AgentGraph Node 使用。"""
 
 from __future__ import annotations
 

@@ -32,7 +32,6 @@ from app.integrations.pdd.base import (
     SendUncertainError,
     ShopIdentity,
 )
-from app.qa.service import QAService
 from app.repositories.console_repository import ConsoleRepository
 from app.services.auto_reply_policy import AutoReplyPolicy, Calibration
 from app.services.event_broker import EventBroker
@@ -43,7 +42,6 @@ from app.services.product_service import (
 
 
 logger = logging.getLogger(__name__)
-QAProvider = Callable[[], Awaitable[QAService]]
 IdentityHandler = Callable[[ShopIdentity], Awaitable[None]]
 RuntimeStatusHandler = Callable[[ConnectorStatusSnapshot], Awaitable[None]]
 KNOWLEDGE_GAP_REASON_CODES = frozenset(
@@ -68,7 +66,6 @@ class ConsoleRuntime:
         self,
         repository: ConsoleRepository,
         connector: CustomerServiceConnector,
-        qa_provider: QAProvider,
         settings: Settings | None = None,
         product_answer_service: ProductAnswerService | None = None,
         *,
@@ -80,11 +77,10 @@ class ConsoleRuntime:
     ) -> None:
         self._repository = repository
         self._connector = connector
-        self._qa_provider = qa_provider
         self._settings = settings or get_settings()
         self._product_answer_service = product_answer_service or ProductAnswerService()
         self._broker = broker or EventBroker()
-        self._legacy_single_shop_mode = shop_id is None
+        self._single_shop_mode = shop_id is None
         self._shop_id = shop_id
         self._identity_handler = identity_handler
         self._runtime_status_handler = runtime_status_handler
@@ -405,7 +401,7 @@ class ConsoleRuntime:
             and shop["global_auto_reply_enabled"]
             and (
                 shop["reception_mode"] == "guarded_auto"
-                or self._legacy_single_shop_mode
+                or self._single_shop_mode
             )
             and conversation["auto_reply_enabled"]
             and status.status == ConnectorStatus.READY
@@ -415,7 +411,7 @@ class ConsoleRuntime:
         blockers: list[str] = []
         if not shop or not shop["global_auto_reply_enabled"]:
             blockers.append("全局自动接待未开启")
-        if not self._legacy_single_shop_mode and (
+        if not self._single_shop_mode and (
             not shop or shop["reception_mode"] != "guarded_auto"
         ):
             blockers.append("当前为人机协同模式")
@@ -448,8 +444,8 @@ class ConsoleRuntime:
                 handoff_reply=str(handoff["reply_template"]),
             )
         except Exception:
-            # A graph failure is terminal for this batch. Never re-run Legacy AI,
-            # which could duplicate model calls or side effects.
+            # A graph failure is terminal for this batch; retrying could duplicate
+            # model calls or channel side effects.
             logger.exception(
                 "pdd_agent_graph_failed",
                 extra={"event": "pdd_agent_graph_failed"},

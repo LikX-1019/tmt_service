@@ -10,7 +10,7 @@ from langgraph.graph import END, START, StateGraph
 from app.agent.chat_runtime import ChatStateRuntime
 from app.agent.dependencies import default_capabilities
 from app.agent.edges.guard_edge import after_guard
-from app.agent.graph import GraphNodeAdapter, build_agent_graph
+from app.agent.graph import GraphNodeAdapter, build_unified_chat_graph
 from app.agent.nodes.guard import GuardNode
 from app.agent.nodes.response import ResponseNode
 from app.agent.nodes.session import SessionHydrateNode
@@ -51,8 +51,8 @@ async def _hydrated_guard_state(message: str) -> AgentState:
 
 def test_agent_graph_compiles_with_required_topology() -> None:
     """Graph 必须由 LangGraph 编译，并包含 START、三个业务节点和 END。"""
-    build_agent_graph()
-    representation = build_agent_graph().get_graph()
+    graph = build_unified_chat_graph()
+    representation = graph.get_graph()
 
     assert {"__start__", "session_hydrate", "guard", "response", "__end__"}.issubset(
         set(representation.nodes)
@@ -65,7 +65,7 @@ def test_agent_graph_compiles_with_required_topology() -> None:
 @pytest.mark.asyncio
 async def test_agent_runtime_invokes_graph_async_and_returns_agent_state() -> None:
     """默认 Runtime 必须使用 ainvoke，并重新验证嵌套 State 类型。"""
-    runtime = AgentRuntime()
+    runtime = AgentRuntime(build_unified_chat_graph())
     state = _state("今天天气怎么样")
 
     result = await runtime.invoke(state)
@@ -122,7 +122,7 @@ async def test_guard_terminal_routes_keep_fixed_reply_and_risk(
     expected_route: str,
 ) -> None:
     """高风险 terminal 输入必须复用当前规则结果并进入安全状态。"""
-    result = await AgentRuntime().invoke(_state(message))
+    result = await AgentRuntime(build_unified_chat_graph()).invoke(_state(message))
 
     assert result.status is WorkflowStatus.COMPLETED
     assert result.route == expected_route
@@ -135,7 +135,9 @@ async def test_guard_terminal_routes_keep_fixed_reply_and_risk(
 @pytest.mark.asyncio
 async def test_guard_continue_reaches_skeleton_response() -> None:
     """无规则命中的普通消息应走 continue 边并到达 Graph convergence。"""
-    result = await AgentRuntime().invoke(_state("今天天气怎么样"))
+    result = await AgentRuntime(build_unified_chat_graph()).invoke(
+        _state("今天天气怎么样")
+    )
 
     assert result.context["guard_terminal"] is False
     assert result.status is WorkflowStatus.COMPLETED
@@ -179,7 +181,7 @@ async def test_state_patch_merge_uses_central_adapter() -> None:
 @pytest.mark.asyncio
 async def test_graph_does_not_mutate_original_input() -> None:
     """Graph 输入必须是隔离快照，成功执行不污染调用方对象。"""
-    runtime = AgentRuntime()
+    runtime = AgentRuntime(build_unified_chat_graph())
     state = _state("我要退款")
     original = state.model_copy(deep=True)
 

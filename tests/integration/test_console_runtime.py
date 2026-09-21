@@ -47,13 +47,9 @@ async def runtime_parts():
     repository = ConsoleRepository(async_sessionmaker(engine, expire_on_commit=False))
     connector = UncertainConnector()
 
-    async def unused_qa_provider():
-        raise AssertionError("人工发送不应调用 QA")
-
     runtime = ConsoleRuntime(
         repository,
         connector,
-        unused_qa_provider,
         Settings(),
         agent_runtime=object(),  # type: ignore[arg-type]
     )

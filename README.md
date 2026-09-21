@@ -27,9 +27,23 @@ Unified Chat AgentGraph
 FAQ / Guard / Social / Product / RAG / Fallback
 ```
 
-G6 已删除 Unified Chat 的 legacy runtime 开关和备用 AI 编排路径。当前生产入口
-只有 `ChatService → AgentRuntime → Unified Chat AgentGraph`；如需回退迁移结果，
-使用 Git revert，而不是通过运行时配置切换。
+PDD 使用同一套业务决策核心：
+
+```text
+BrowserMessage
+        ↓
+ConsoleRuntime channel adapter
+        ↓
+AgentRuntime
+        ↓
+shared AgentGraph
+        ↓
+AutoReplyPolicy / persistence / outbound
+```
+
+G6 已删除 legacy runtime 开关和备用 AI 编排路径。当前 Unified Chat 与 PDD 只有
+上述共享 AgentGraph 业务路径；如需回退迁移结果，使用 Git revert，而不是通过
+运行时配置切换。
 
 `POST /api/v1/qa` 仍是独立知识问答接口，供 QA/RAG 调试和兼容调用使用；它不是
 Customer Demo 的默认主链路。

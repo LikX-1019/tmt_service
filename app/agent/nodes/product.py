@@ -93,7 +93,7 @@ def _pdd_product_handoff_patch(
     answer: str,
     reason_code: str,
 ) -> StatePatch:
-    """把 PDD Legacy 商品安全失败表达为 Graph Human workflow。"""
+    """把 PDD 商品安全失败表达为 Graph Human workflow。"""
     turn = state.turn
     product_id = (
         state.session.current_product.product_id

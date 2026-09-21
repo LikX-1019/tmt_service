@@ -331,7 +331,6 @@ async def run_parity(
     channel_runtime = ConsoleRuntime(
         repository,
         connector,
-        qa_provider,
         settings,
         product_answer_service=answers,
         agent_runtime=channel_agent_runtime,

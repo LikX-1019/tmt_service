@@ -70,7 +70,6 @@ async def test_greeting_routes_to_agent_before_qa() -> None:
     runtime = ConsoleRuntime(
         repository,
         ReadyConnector(),
-        qa_provider,
         settings,
         agent_runtime=build_console_graph_runtime(
             repository,
