@@ -5,15 +5,16 @@ from __future__ import annotations
 import logging
 
 from app.agent.dependencies import AgentCapabilities
+from app.agent.constants import RESPONSE_NODE
 from app.agent.state import (
     AgentReplyState,
     AgentState,
     HumanState,
-    RetrievalEvidence,
     RetrievalState,
     StatePatch,
 )
 from app.core.exceptions import LLMInvocationError
+from app.qa.models import RetrievalDocument
 from app.services.product_service import ProductProfile
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ def _profile_from_state(state: AgentState) -> ProductProfile | None:
 
 
 class FallbackNode:
-    """尽力检索 RAG context，然后调用 ContextualFallbackService。"""
+    """只使用已 checkpoint 的 RAG evidence 调用 ContextualFallbackService。"""
 
     def __init__(self, capabilities: AgentCapabilities) -> None:
         self._capabilities = capabilities
@@ -50,23 +51,25 @@ class FallbackNode:
         if state.session is None or state.turn is None:
             raise ValueError("FallbackNode 前必须完成 hydration")
 
-        references = []
-        if self._capabilities.qa_provider is not None:
-            try:
-                qa_service = await self._capabilities.qa_provider()
-                references = await qa_service.retrieve_context_candidates(
-                    state.turn.original_query
+        retrieval = state.turn.retrieval
+        references = (
+            [
+                RetrievalDocument(
+                    chunk_id=item.chunk_id or item.document_id,
+                    content=item.content,
+                    title=item.title,
+                    source=item.source,
+                    metadata=item.metadata,
+                    dense_score=item.dense_score,
+                    bm25_score=item.bm25_score,
+                    fusion_score=item.fusion_score,
+                    rerank_score=item.rerank_score,
                 )
-            except Exception:
-                logger.warning(
-                    "qa_fallback_context_retrieval_failed",
-                    exc_info=True,
-                    extra={
-                        "event": "qa_fallback_context_retrieval_failed",
-                        "fallback_reason": "rag_context_unavailable",
-                    },
-                )
-
+                for item in retrieval.candidates
+            ]
+            if retrieval is not None
+            else []
+        )
         history = [
             {"customer": item.customer, "assistant": item.assistant}
             for item in state.session.short_term_memory.recent_turns
@@ -90,39 +93,24 @@ class FallbackNode:
             )
             raise LLMInvocationError() from exc
 
-        evidence = [
-            RetrievalEvidence(
-                document_id=str(item.metadata.get("document_id") or item.chunk_id),
-                chunk_id=item.chunk_id,
-                content=item.content,
-                source=item.source,
-                product_id=(
-                    str(item.metadata.get("product_id"))
-                    if item.metadata.get("product_id") is not None
-                    else None
-                ),
-                dense_score=item.dense_score,
-                bm25_score=item.bm25_score,
-                fusion_score=item.fusion_score,
-                rerank_score=item.rerank_score,
-            )
-            for item in references
-        ]
         route = "human" if result.needs_human else "llm_fallback"
         patch = StatePatch(
             retrieval=RetrievalState(
-                candidates=evidence,
-                evidence_sufficient=bool(evidence),
+                status=retrieval.status if retrieval is not None else "not_requested",
+                candidates=retrieval.candidates if retrieval is not None else [],
+                evidence_sufficient=bool(
+                    retrieval.candidates if retrieval is not None else []
+                ),
                 top_score=max(
                     (
                         item.rerank_score
-                        for item in evidence
-                        if item.rerank_score is not None
+                        for item in retrieval.candidates
+                        if retrieval is not None and item.rerank_score is not None
                     ),
                     default=None,
                 ),
             ),
-            evidence=evidence,
+            evidence=retrieval.candidates if retrieval is not None else [],
             route="human" if result.needs_human else "llm_fallback",
             fallback_reason=result.reason_code,
             final_answer=result.answer,
@@ -141,14 +129,12 @@ class FallbackNode:
                     else None
                 ),
                 product_resolution=(
-                    "conversation"
-                    if state.turn.product.context is not None
-                    else "none"
+                    "conversation" if state.turn.product.context is not None else "none"
                 ),
                 reason_code=result.reason_code,
                 confidence=result.confidence,
             ),
-            next_node="response",
+            next_node=RESPONSE_NODE,
         )
         if result.needs_human:
             patch.human = HumanState(

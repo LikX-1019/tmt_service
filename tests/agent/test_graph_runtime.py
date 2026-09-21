@@ -80,6 +80,7 @@ async def test_agent_runtime_invokes_graph_async_and_returns_agent_state() -> No
         "guard",
         "social",
         "product_resolve",
+        "rag_context",
         "fallback",
         "response",
     ]
@@ -148,9 +149,9 @@ async def test_guard_continue_reaches_skeleton_response() -> None:
     ["我要人工", "今天天气怎么样"],
 )
 async def test_after_guard_returns_registered_route_keys(message: str) -> None:
-    """条件边是纯函数，terminal 和 continue 都必须已注册到 response。"""
+    """条件边是纯函数，human/terminal/continue 目标必须已注册。"""
     state = await _hydrated_guard_state(message)
-    expected = "terminal" if message == "我要人工" else "continue"
+    expected = "human_transfer" if message == "我要人工" else "social"
 
     assert after_guard(state) == expected
 

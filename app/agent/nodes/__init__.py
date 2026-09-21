@@ -3,6 +3,7 @@
 from app.agent.nodes.faq import FAQNode, faq_node
 from app.agent.nodes.fallback import FallbackNode, fallback_node
 from app.agent.nodes.guard import GuardNode, guard_node
+from app.agent.nodes.human_transfer import HumanTransferNode, human_transfer_node
 from app.agent.nodes.product import (
     ProductAnswerNode,
     ProductLoadNode,
@@ -16,6 +17,7 @@ __all__ = [
     "FAQNode",
     "FallbackNode",
     "GuardNode",
+    "HumanTransferNode",
     "ProductAnswerNode",
     "ProductLoadNode",
     "ProductResolveNode",
@@ -25,6 +27,7 @@ __all__ = [
     "faq_node",
     "fallback_node",
     "guard_node",
+    "human_transfer_node",
     "response_node",
     "session_hydrate_node",
     "social_node",

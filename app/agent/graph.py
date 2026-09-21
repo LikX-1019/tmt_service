@@ -11,7 +11,21 @@ from langgraph.graph.state import CompiledStateGraph
 from app.agent.dependencies import AgentCapabilities, default_capabilities
 from app.agent.coordinator import StateCoordinator
 from app.agent.edges.entry_edge import route_graph_entry
+from app.agent.constants import (
+    FAQ_EXACT_NODE,
+    FALLBACK_NODE,
+    GUARD_NODE,
+    HUMAN_TRANSFER_NODE,
+    PRODUCT_ANSWER_NODE,
+    PRODUCT_LOAD_NODE,
+    PRODUCT_RESOLVE_NODE,
+    RAG_CONTEXT_NODE,
+    RESPONSE_NODE,
+    SESSION_HYDRATE_NODE,
+    SOCIAL_NODE,
+)
 from app.agent.edges.faq_edge import after_faq
+from app.agent.edges.fallback_edge import after_fallback
 from app.agent.edges.guard_edge import after_guard
 from app.agent.edges.product_edge import after_product_load, after_product_resolve
 from app.agent.edges.social_edge import after_social
@@ -23,6 +37,8 @@ from app.agent.nodes.product import (
     ProductLoadNode,
     ProductResolveNode,
 )
+from app.agent.nodes.rag import RAGContextNode
+from app.agent.nodes.human_transfer import HumanTransferNode
 from app.agent.nodes.response import ResponseNode
 from app.agent.nodes.session import SessionHydrateNode
 from app.agent.nodes.social import SocialNode
@@ -33,7 +49,6 @@ from app.agent.protocols import (
     AgentNodeExecutionError,
 )
 from app.agent.state import AgentState, StatePatch
-from app.rules.registry import RuleRegistry
 
 
 def _safe_error_code(exc: BaseException) -> str:
@@ -124,19 +139,21 @@ def build_unified_chat_graph(
     capabilities: AgentCapabilities | None = None,
     coordinator: StateCoordinator | None = None,
 ) -> CompiledStateGraph:
-    """构建与 Legacy Unified Chat 顺序等价的最小 G2A Graph。"""
+    """构建当前 Unified Chat durable/resumable 业务主图。"""
     caps = capabilities or default_capabilities()
     builder: StateGraph = StateGraph(AgentState)
     nodes = {
-        "session_hydrate": SessionHydrateNode(caps),
-        "faq_exact": FAQNode(caps),
-        "guard": GuardNode(caps),
-        "social": SocialNode(caps),
-        "product_resolve": ProductResolveNode(caps),
-        "product_load": ProductLoadNode(caps),
-        "product_answer": ProductAnswerNode(caps),
-        "fallback": FallbackNode(caps),
-        "response": ResponseNode(),
+        SESSION_HYDRATE_NODE: SessionHydrateNode(caps),
+        FAQ_EXACT_NODE: FAQNode(caps),
+        GUARD_NODE: GuardNode(caps),
+        SOCIAL_NODE: SocialNode(caps),
+        PRODUCT_RESOLVE_NODE: ProductResolveNode(caps),
+        PRODUCT_LOAD_NODE: ProductLoadNode(caps),
+        PRODUCT_ANSWER_NODE: ProductAnswerNode(caps),
+        RAG_CONTEXT_NODE: RAGContextNode(caps),
+        FALLBACK_NODE: FallbackNode(caps),
+        HUMAN_TRANSFER_NODE: HumanTransferNode(),
+        RESPONSE_NODE: ResponseNode(),
     }
     for name, node in nodes.items():
         builder.add_node(
@@ -153,47 +170,59 @@ def build_unified_chat_graph(
     builder.add_conditional_edges(
         "faq_exact",
         after_faq,
-        {"response": "response", "guard": "guard"},
+        {RESPONSE_NODE: RESPONSE_NODE, GUARD_NODE: GUARD_NODE},
     )
     builder.add_conditional_edges(
         "guard",
         after_guard,
-        {"terminal": "response", "continue": "social"},
+        {
+            HUMAN_TRANSFER_NODE: HUMAN_TRANSFER_NODE,
+            RESPONSE_NODE: RESPONSE_NODE,
+            SOCIAL_NODE: SOCIAL_NODE,
+        },
     )
     builder.add_conditional_edges(
         "social",
         after_social,
-        {"response": "response", "product_resolve": "product_resolve"},
+        {RESPONSE_NODE: RESPONSE_NODE, PRODUCT_RESOLVE_NODE: PRODUCT_RESOLVE_NODE},
     )
     builder.add_conditional_edges(
         "product_resolve",
         after_product_resolve,
         {
-            "terminal_product_result": "response",
-            "load_product": "product_load",
-            "fallback": "fallback",
+            RESPONSE_NODE: RESPONSE_NODE,
+            PRODUCT_LOAD_NODE: PRODUCT_LOAD_NODE,
+            RAG_CONTEXT_NODE: RAG_CONTEXT_NODE,
+            FALLBACK_NODE: FALLBACK_NODE,
         },
     )
     builder.add_conditional_edges(
         "product_load",
         after_product_load,
         {
-            "product_answer": "product_answer",
-            "fallback": "fallback",
-            "response": "response",
+            PRODUCT_ANSWER_NODE: PRODUCT_ANSWER_NODE,
+            RAG_CONTEXT_NODE: RAG_CONTEXT_NODE,
+            FALLBACK_NODE: FALLBACK_NODE,
+            RESPONSE_NODE: RESPONSE_NODE,
         },
     )
+    builder.add_edge(RAG_CONTEXT_NODE, FALLBACK_NODE)
     builder.add_edge("product_answer", "response")
-    builder.add_edge("fallback", "response")
+    builder.add_conditional_edges(
+        "fallback",
+        after_fallback,
+        {HUMAN_TRANSFER_NODE: HUMAN_TRANSFER_NODE, RESPONSE_NODE: RESPONSE_NODE},
+    )
+    builder.add_edge("human_transfer", "response")
     builder.add_edge("response", END)
     try:
-        # G2A 仍不配置 LangGraph checkpointer；Node 持久化属于 G3。
+        # Durable checkpoints use the injected StateCoordinator, not LangGraph.
         return builder.compile()
     except Exception as exc:
         raise AgentGraphExecutionError("Agent StateGraph 编译失败") from exc
 
 
-def build_agent_graph(rule_registry: RuleRegistry | None = None) -> CompiledStateGraph:
+def build_agent_graph(rule_registry: Any | None = None) -> CompiledStateGraph:
     """兼容 G1 显式 Skeleton 构造入口。"""
     capabilities = default_capabilities()
     if rule_registry is not None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 from app.agent.state import (
     AgentReplyState,
@@ -13,7 +14,6 @@ from app.agent.state import (
     StatePatch,
 )
 from app.qa.models import QAResult
-from app.rules.registry import RuleEvaluationResult
 
 
 def _utcnow() -> datetime:
@@ -22,7 +22,7 @@ def _utcnow() -> datetime:
 
 
 def rule_result_to_patch(
-    result: RuleEvaluationResult,
+    result: Any,
 ) -> StatePatch:
     """把确定性规则结果映射为 StatePatch，不修改任何 State。"""
     terminal = result.terminal_decision
@@ -82,6 +82,7 @@ def qa_result_to_patch(result: QAResult, *, next_node: str) -> StatePatch:
         RetrievalEvidence(
             document_id=str(item.metadata.get("document_id") or item.chunk_id),
             chunk_id=item.chunk_id,
+            title=item.title,
             content=item.content,
             source=item.source,
             product_id=(
@@ -104,6 +105,7 @@ def qa_result_to_patch(result: QAResult, *, next_node: str) -> StatePatch:
     patch = StatePatch(
         context={"faq_hit": result.route == "faq"},
         retrieval=RetrievalState(
+            status="available" if candidates else "empty",
             candidates=candidates,
             dense_count=max(0, counts.get("dense", 0)),
             bm25_count=max(0, counts.get("bm25", 0)),

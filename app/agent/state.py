@@ -105,6 +105,7 @@ class RetrievalEvidence(BaseModel):
 
     document_id: str
     chunk_id: str | None = None
+    title: str | None = None
     content: str
     source: str | None = None
     product_id: str | None = None
@@ -234,6 +235,9 @@ class ProductResolutionState(BaseModel):
         "conversation",
         "none",
     ] = "none"
+    requires_product: bool = False
+    product_rule_name: str | None = None
+    answer_required: bool = False
     error_code: str | None = None
 
 
@@ -306,6 +310,9 @@ class RetrievalState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     context: RetrievalContext = Field(default_factory=RetrievalContext)
+    status: Literal["not_requested", "available", "empty", "unavailable"] = (
+        "not_requested"
+    )
     candidates: list[RetrievalEvidence] = Field(default_factory=list)
     dense_count: int = Field(default=0, ge=0)
     bm25_count: int = Field(default=0, ge=0)
@@ -521,6 +528,7 @@ class StatePatch(BaseModel):
     evidence: list[RetrievalEvidence] = Field(default_factory=list)
 
     current_product: ProductReference | None = None
+    clear_current_product: bool = False
     product: ProductResolutionState | None = None
     retrieval: RetrievalState | None = None
     tool: ToolState | None = None
@@ -619,6 +627,21 @@ class AgentState(BaseModel):
             reason for reason in patch.risk_reasons if reason not in self.risk_reasons
         )
 
+        if patch.clear_current_product:
+            if self.session is None:
+                raise ValueError("清除 current_product 前必须挂载 ChatSessionState")
+            stale_product_id = (
+                self.session.current_product.product_id
+                if self.session.current_product is not None
+                else None
+            )
+            self.session.current_product = None
+            if stale_product_id:
+                self.session.recent_product_ids = [
+                    product_id
+                    for product_id in self.session.recent_product_ids
+                    if product_id != stale_product_id
+                ]
         if patch.current_product is not None:
             if self.session is None:
                 raise ValueError("更新 current_product 前必须挂载 ChatSessionState")

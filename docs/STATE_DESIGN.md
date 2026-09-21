@@ -113,6 +113,10 @@ AgentRuntime 和 Unified Chat AgentGraph。`_route_chat()` 只保留为显式 `l
 - StateCoordinator 拥有 Node lifecycle；AgentRuntime 可从 actual next/failed node
   显式恢复，但没有 automatic startup recovery。
 - Legacy rollback 仍保留粗粒度 `chat_turn` checkpoint。
+- Explicit nodes: SessionHydrate、FAQ、Guard、Social、ProductResolve、ProductLoad、
+  ProductAnswer、RAGContext、Fallback、HumanTransfer、Response。
+- Tools and Memory are not implemented; standalone IntentNode remains a future
+  extension point.
 
 ### Planned For Graph Migration
 

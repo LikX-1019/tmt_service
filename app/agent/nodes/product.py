@@ -55,25 +55,29 @@ def _terminal_product_patch(
     products: list[AgentProductCandidateState] | None = None,
 ) -> StatePatch:
     """生成商品解析终态：不再进入 ProductLoad。"""
-    rule_name = state.context.get("guard_product_rule_name")
     return StatePatch(
         product=ProductResolutionState(
             reference=state.turn.product.reference if state.turn else None,
             recent_products=state.turn.product.recent_products if state.turn else [],
             status=status,  # type: ignore[arg-type]
             resolution_source=resolution_source,  # type: ignore[arg-type]
+            requires_product=state.turn.product.requires_product
+            if state.turn
+            else False,
+            product_rule_name=state.turn.product.product_rule_name
+            if state.turn
+            else None,
+            answer_required=False,
             error_code=route,
         ),
         route=route,  # type: ignore[arg-type]
         final_answer=answer,
         reply=AgentReplyState(
-            source="product_selection"
-            if status == "selection_required"
-            else "product",
+            source="product_selection" if status == "selection_required" else "product",
             route=route,
             answer=answer,
             product_resolution=resolution_source,  # type: ignore[arg-type]
-            rule_name=rule_name,
+            rule_name=state.turn.product.product_rule_name if state.turn else None,
             reason_code=reason_code,
             products=products or [],
         ),
@@ -93,11 +97,14 @@ class ProductResolveNode:
             raise ValueError("ProductResolveNode 前必须完成 hydration")
 
         recent = _refs(state)
-        resolution = self._capabilities.product_resolver.resolve(
-            request_product_id=turn.product.reference.product_id
+        request_product_id = (
+            turn.product.reference.product_id
             if turn.product.reference is not None
-            and turn.product.reference.source == "customer_selected"
-            else None,
+            and turn.product.resolution_source == "request"
+            else None
+        )
+        resolution = self._capabilities.product_resolver.resolve(
+            request_product_id=request_product_id,
             message=turn.original_query,
             conversation_product_id=(
                 session.current_product.product_id
@@ -146,34 +153,32 @@ class ProductResolveNode:
         keep_bound = (
             resolution.source == "conversation"
             and session.current_product is not None
-            and bool(state.context.get("guard_requires_product"))
+            and turn.product.requires_product
         )
         name_query = None
         if not explicit and not keep_bound:
             name_query = self._capabilities.product_resolver.extract_name_query(
                 turn.original_query,
-                product_intent=bool(state.context.get("guard_requires_product")),
+                product_intent=turn.product.requires_product,
             )
 
         if name_query is not None:
             if self._capabilities.products is None:
                 raise ValueError("商品名称解析需要 ProductRepository")
             try:
-                candidates = (
-                    await self._capabilities.products.search_products_by_name(
-                        name_query,
-                        limit=5,
-                    )
+                candidates = await self._capabilities.products.search_products_by_name(
+                    name_query,
+                    limit=5,
                 )
             except ProductLookupError as exc:
                 raise ProductServiceUnavailableError() from exc
             if not candidates:
                 return _terminal_product_patch(
                     state,
-                status="not_found",
-                route="product_not_found",
-                answer="没有找到对应商品，请检查商品名称后重试。",
-                resolution_source="name_candidates",
+                    status="not_found",
+                    route="product_not_found",
+                    answer="没有找到对应商品，请检查商品名称后重试。",
+                    resolution_source="name_candidates",
                 )
             exact = [item for item in candidates if item.match_type == "exact"]
             if len(exact) == 1:
@@ -203,10 +208,8 @@ class ProductResolveNode:
         if not explicit and self._capabilities.product_resolver.has_url(
             turn.original_query
         ):
-            invalid = (
-                self._capabilities.product_resolver.has_unresolved_known_url(
-                    turn.original_query
-                )
+            invalid = self._capabilities.product_resolver.has_unresolved_known_url(
+                turn.original_query
             )
             return _terminal_product_patch(
                 state,
@@ -218,9 +221,7 @@ class ProductResolveNode:
                 resolution_source="none",
             )
 
-        product_question = explicit or bool(
-            state.context.get("guard_requires_product")
-        )
+        product_question = explicit or turn.product.requires_product
         if product_question and resolution.product_id is None:
             return _terminal_product_patch(
                 state,
@@ -228,7 +229,6 @@ class ProductResolveNode:
                 route="product_missing",
                 answer="当前还没有识别到您咨询的具体商品，请提供商品信息或商品 ID。",
                 resolution_source="none",
-                rule_name=self._product_rule_name(state),
             )
         if resolution.product_id is None:
             return StatePatch(
@@ -237,8 +237,11 @@ class ProductResolveNode:
                     if state.turn
                     else [],
                     status="not_required",
+                    requires_product=turn.product.requires_product,
+                    product_rule_name=turn.product.product_rule_name,
+                    answer_required=False,
                 ),
-                next_node="fallback",
+                next_node="rag_context",
             )
         source = (
             turn.product.reference.source
@@ -247,25 +250,22 @@ class ProductResolveNode:
             else "message_extraction"
         )
         return StatePatch(
-            context={"product_answer_required": product_question},
             product=ProductResolutionState(
                 reference=ProductReference(
                     product_id=resolution.product_id,
                     source="manual" if resolution.source == "conversation" else source,
                 ),
-                recent_products=state.turn.product.recent_products if state.turn else [],
+                recent_products=state.turn.product.recent_products
+                if state.turn
+                else [],
                 status="pending",
                 resolution_source=resolution.source,
+                requires_product=turn.product.requires_product,
+                product_rule_name=turn.product.product_rule_name,
+                answer_required=product_question,
             ),
             next_node="product_load",
         )
-
-    @staticmethod
-    def _product_rule_name(state: AgentState) -> str | None:
-        names = state.context.get("guard_rule_names")
-        if not isinstance(names, list):
-            return None
-        return next((str(item) for item in names if isinstance(item, str)), None)
 
 
 class ProductLoadNode:
@@ -287,7 +287,10 @@ class ProductLoadNode:
                 reference.product_id
             )
         except ProductNotFoundError:
-            if turn.product.reference is not None and turn.product.reference.source == "manual":
+            if (
+                turn.product.reference is not None
+                and turn.product.reference.source == "manual"
+            ):
                 if (
                     state.conversation_id
                     and self._capabilities.conversations is not None
@@ -296,7 +299,7 @@ class ProductLoadNode:
                         state.conversation_id
                     )
                 return StatePatch(
-                    current_product=None,
+                    clear_current_product=True,
                     product=ProductResolutionState(
                         recent_products=turn.product.recent_products,
                         status="not_found",
@@ -309,7 +312,7 @@ class ProductLoadNode:
                         route="product_not_found",
                         answer="未找到对应商品，请确认商品信息后重试。",
                         product_resolution="conversation",
-                        rule_name=state.context.get("guard_product_rule_name"),
+                        rule_name=turn.product.product_rule_name,
                     ),
                     next_node="response",
                 )
@@ -347,9 +350,7 @@ class ProductLoadNode:
             ],
             warnings=[item for item in (product.warnings or "").splitlines() if item],
             after_sales_limits=[
-                item
-                for item in (product.after_sales_limits or "").splitlines()
-                if item
+                item for item in (product.after_sales_limits or "").splitlines() if item
             ],
             source_updated_at=None,
             resolved_at=_now(),
@@ -363,11 +364,12 @@ class ProductLoadNode:
                 context=context,
                 profile=product.model_dump(mode="json"),
                 resolution_source=turn.product.resolution_source,
+                requires_product=turn.product.requires_product,
+                product_rule_name=turn.product.product_rule_name,
+                answer_required=turn.product.answer_required,
             ),
             next_node=(
-                "product_answer"
-                if state.context.get("product_answer_required") is True
-                else "fallback"
+                "product_answer" if turn.product.answer_required else "fallback"
             ),
         )
 
@@ -404,7 +406,7 @@ class ProductAnswerNode:
                 product_id=context.product_id,
                 product_name=context.name,
                 product_resolution=turn.product.resolution_source,
-                rule_name=state.context.get("guard_product_rule_name"),
+                rule_name=turn.product.product_rule_name,
                 confidence=result.confidence,
             ),
             next_node="response",

@@ -20,7 +20,7 @@ class SocialNode:
 
         has_binding = session.current_product is not None
         explicit_product = turn.product.reference is not None
-        requires_product = bool(state.context.get("guard_requires_product"))
+        requires_product = turn.product.requires_product
         if has_binding or explicit_product or requires_product:
             return StatePatch(context={"social_hit": False}, next_node="product_resolve")
 

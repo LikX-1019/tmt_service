@@ -3,21 +3,9 @@
 from __future__ import annotations
 
 from app.agent.state import AgentState
+from app.agent.constants import RESUMABLE_GRAPH_NODES
 
-
-GRAPH_ENTRY_NODES = frozenset(
-    {
-        "session_hydrate",
-        "faq_exact",
-        "guard",
-        "social",
-        "product_resolve",
-        "product_load",
-        "product_answer",
-        "fallback",
-        "response",
-    }
-)
+GRAPH_ENTRY_NODES = RESUMABLE_GRAPH_NODES
 
 
 def route_graph_entry(state: AgentState) -> str:

@@ -3,41 +3,47 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Awaitable, Callable
-
-from app.qa.service import QAService
-from app.repositories.chat_message_repository import ChatConversationMessageRepository
-from app.repositories.conversation_repository import ConversationProductRepository
-from app.repositories.product_repository import ProductRepository
-from app.rules.registry import RuleRegistry, default_rule_registry
-from app.services.contextual_fallback_service import ContextualFallbackService
-from app.services.product_resolver import ProductResolver
-from app.services.product_service import ProductAnswerService
-from app.services.semantic_product_resolver import SemanticProductResolver
-from app.services.social_router import SocialRouter
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 
-QAProvider = Callable[[], Awaitable[QAService]]
+
+def default_rule_registry() -> RuleRegistry:
+    """延迟导入，避免 rules → agent.state → agent graph → rules 循环。"""
+    from app.rules.registry import default_rule_registry
+
+    return default_rule_registry()
+
+
+QAProvider = Callable[[], Awaitable[Any]]
+RuleRegistry = Any
 
 
 @dataclass(frozen=True, slots=True)
 class AgentCapabilities:
     """Unified Chat Graph 所需能力的不可变注入边界。"""
 
-    rules: RuleRegistry
-    social_router: SocialRouter
-    product_resolver: ProductResolver
-    semantic_products: SemanticProductResolver
-    product_answers: ProductAnswerService
-    fallbacks: ContextualFallbackService
+    rules: Any
+    social_router: Any
+    product_resolver: Any
+    semantic_products: Any
+    product_answers: Any
+    fallbacks: Any
     qa_provider: QAProvider | None = None
-    conversations: ConversationProductRepository | None = None
-    messages: ChatConversationMessageRepository | None = None
-    products: ProductRepository | None = None
+    conversations: Any | None = None
+    messages: Any | None = None
+    products: Any | None = None
 
 
 def default_capabilities() -> AgentCapabilities:
-    """构造无持久化依赖的 Skeleton 能力；显式测试应注入全部所需能力。"""
+    """延迟导入能力实现，避免 rules/services → agent graph → rules 循环。"""
+    from app.rules.registry import default_rule_registry
+    from app.services.contextual_fallback_service import ContextualFallbackService
+    from app.services.product_resolver import ProductResolver
+    from app.services.product_service import ProductAnswerService
+    from app.services.semantic_product_resolver import SemanticProductResolver
+    from app.services.social_router import SocialRouter
+
     return AgentCapabilities(
         rules=default_rule_registry(),
         social_router=SocialRouter(),

@@ -399,6 +399,8 @@ async def test_stale_bound_product_is_cleared():
     assert legacy_repo.cleared is True
     assert graph_repo.cleared is True
     assert state.turn.product.status == "not_found"
+    assert state.session.current_product is None
+    assert "gone" not in state.session.recent_product_ids
 
 
 @pytest.mark.asyncio

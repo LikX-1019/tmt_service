@@ -11,7 +11,8 @@ G2 = COMPLETED
 G2A = COMPLETED
 G2B = COMPLETED
 G3 = COMPLETED
-G4 = NOT_STARTED
+G4 = COMPLETED
+G5 = NOT_STARTED
 PLAN_VERSION = 1
 BASELINE_DATE = 2026-09-20
 ```
@@ -194,12 +195,13 @@ G2B cutover evidence lives in `docs/AGENT_GRAPH_G2B_CUTOVER.md`. Summary:
 * Validation: agent 110, chat service 30, chat API 10, full suite 479 passed.
 
 G3 durable checkpoint evidence lives in `docs/AGENT_GRAPH_G3_CHECKPOINT.md`.
+G4 hardening evidence lives in `docs/AGENT_GRAPH_G4_HARDENING.md`.
 
 ### Phase G3 — StatePatch + Node Checkpoint Integration
 
 | Item | Boundary |
 |---|---|
-| Status | `NOT_STARTED` |
+| Status | `COMPLETED` |
 | Goal | 把粗粒度 `chat_turn` recorder 升级为 Node lifecycle checkpoint。 |
 | Scope | Node before/after/failed/resume 保存点；StateCoordinator 与 Graph execution 对齐；副作用动作生命周期。 |
 | Prohibited | 丢失 revision、retry、resume、PendingAction、UNCERTAIN 语义；把不可序列化对象写入 State；重复副作用。 |
@@ -209,6 +211,11 @@ G3 durable checkpoint evidence lives in `docs/AGENT_GRAPH_G3_CHECKPOINT.md`.
 
 G3 completed durable node lifecycle without LangGraph checkpointer or automatic
 startup recovery. See `docs/AGENT_GRAPH_G3_CHECKPOINT.md`.
+
+G4 completed Business Graph Hardening & Structural Convergence without changing API
+or PDD behavior. RAG retrieval and generation are separate durable nodes, Human
+Transfer is explicit, Product routing is typed, current-product clearing is explicit,
+Guard is channel-neutral, and node names share one registry.
 
 ### Phase G4 — Product / Social / FAQ / RAG / Fallback Full Migration
 
@@ -323,7 +330,7 @@ Memory Store 是能力层，不是 Graph 本身。
 - [ ] PDD → Channel Adapter → AgentRuntime → AgentGraph。
 - [ ] `ChatService` 不再承担业务 workflow。
 - [ ] `ConsoleRuntime` 不再承担 AI workflow。
-- [ ] Guard、Social、Intent、Product、FAQ、RAG、Fallback、Human、Response 主要业务步骤由 Graph Node 表达。
+- [x] Guard、Social、Product、FAQ、RAG、Fallback、Human、Response 主要业务步骤由 Graph Node 表达。
 - [ ] 主要业务分支由 Conditional Edge 表达。
 - [x] StatePatch 是 Node 状态更新机制。
 - [x] Checkpoint 与 Node execution 对齐。

@@ -176,6 +176,7 @@ async def test_graph_is_default_and_does_not_call_legacy_route(monkeypatch):
 
     assert service._runtime_mode == "graph"
     assert response.source == "llm_fallback"
+    assert response.route == "llm_fallback"
     assert response.answer == "fallback answer"
 
 

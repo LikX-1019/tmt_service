@@ -223,3 +223,10 @@ The rule does not persist product facts. In unified chat, `ChatService` uses the
 This version intentionally does **not** implement database product detail queries, PostgreSQL repository access, Milvus retrieval, LLM generation, Tool execution, side effects, full Agent State, Checkpoint persistence, or Agent Graph orchestration.
 
 Rule Engine is the deterministic decision layer. Product facts belong to PostgreSQL-backed services, QA/RAG evidence belongs to `QAService` and Milvus/BM25 retrieval, and runtime workflow state belongs to the State Contract / Checkpoint infrastructure.
+
+## 10. Guard channel context
+
+Graph production uses `GuardNode` and the current compatibility order remains
+FAQ Exact → Guard. GuardNode now supplies `AgentState.session.channel` and
+`AgentState.session.shop_id` to `RuleRegistry` instead of a hardcoded Unified Chat
+channel. FAQ-before-Guard remains tracked migration debt, not final safety design.

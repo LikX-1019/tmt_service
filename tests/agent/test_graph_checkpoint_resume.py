@@ -456,7 +456,7 @@ def test_faq_next_node_matches_conditional_edge(hit, expected):
 
 @pytest.mark.parametrize(
     ("terminal", "expected"),
-    [(True, "terminal"), (False, "continue")],
+    [(True, "response"), (False, "social")],
 )
 def test_guard_next_node_matches_conditional_edge(terminal, expected):
     from app.agent.edges.guard_edge import after_guard
@@ -519,7 +519,5 @@ def test_product_load_next_node_matches_conditional_edge(answer_required, expect
 
     state_obj = state("product question")
     state_obj.turn.product.status = "resolved"
-    state_obj.apply_patch(
-        StatePatch(context={"product_answer_required": answer_required})
-    )
+    state_obj.turn.product.answer_required = answer_required
     assert after_product_load(state_obj) == expected

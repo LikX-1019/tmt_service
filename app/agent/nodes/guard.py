@@ -5,7 +5,6 @@ from __future__ import annotations
 from app.agent.dependencies import AgentCapabilities
 from app.agent.state import AgentState, StatePatch
 from app.agent.state_mappers import rule_result_to_patch
-from app.rules.base import RuleContext
 
 
 class GuardNode:
@@ -31,6 +30,8 @@ class GuardNode:
             if state.session.current_product is not None
             else None
         )
+        from app.rules.base import RuleContext
+
         result = self._rules.evaluate(
             message,
             RuleContext(
@@ -38,10 +39,25 @@ class GuardNode:
                 customer_id=state.session.customer_id,
                 current_product_id=current_product_id,
                 service_stage=state.session.service_stage,
-                channel="unified_chat",
+                channel=state.session.channel,
+                shop_id=state.session.shop_id,
             ),
         )
-        return rule_result_to_patch(result)
+        patch = rule_result_to_patch(result)
+        patch.product = state.turn.product.model_copy(
+            update={
+                "requires_product": result.requires_product,
+                "product_rule_name": next(
+                    (
+                        decision.rule_name
+                        for decision in result.decisions
+                        if decision.requires_product and decision.rule_name
+                    ),
+                    None,
+                ),
+            }
+        )
+        return patch
 
 
 guard_node = GuardNode

@@ -45,8 +45,8 @@ class CheckpointStore(Protocol):
 class FileCheckpointStore:
     """适配当前单机部署的原子 JSON 检查点存储。"""
 
-    def __init__(self, directory: Path | None = None) -> None:
-        self._directory = directory or DEFAULT_CHECKPOINT_DIR
+    def __init__(self, directory: Path | str | None = None) -> None:
+        self._directory = Path(directory) if directory else DEFAULT_CHECKPOINT_DIR
         self._locks: dict[str, asyncio.Lock] = {}
 
     async def save(self, state: AgentState, *, reason: str) -> AgentState:
