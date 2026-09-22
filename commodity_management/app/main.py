@@ -97,8 +97,13 @@ def health() -> dict[str, str]:
 
 @app.post("/api/auth/login")
 def login(payload: LoginRequest, request: Request) -> dict[str, str]:
-    username_ok = secrets.compare_digest(payload.username, settings.commodity_admin_username)
-    password_ok = secrets.compare_digest(payload.password, settings.commodity_admin_password)
+    # compare_digest 对 str 只支持 ASCII，凭据含中文/全角字符时会抛 TypeError 变成 500，故按 UTF-8 字节比较。
+    username_ok = secrets.compare_digest(
+        payload.username.encode("utf-8"), settings.commodity_admin_username.encode("utf-8")
+    )
+    password_ok = secrets.compare_digest(
+        payload.password.encode("utf-8"), settings.commodity_admin_password.encode("utf-8")
+    )
     if not username_ok or not password_ok:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户名或密码错误")
     request.session.clear()
