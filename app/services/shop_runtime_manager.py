@@ -113,6 +113,7 @@ class ShopRuntimeManager:
     ) -> CustomerServiceConnector:
         return PddPlaywrightConnector(
             self.settings,
+            shop_id=str(shop["id"]),
             profile_dir=self._profile_path(shop),
             window_slot=slot,
             require_identity=True,

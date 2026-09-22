@@ -1,7 +1,8 @@
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from app.integrations.pdd import playwright_connector as playwright_connector_module
 from app.integrations.pdd.base import ConnectorError, ConnectorStatus
 from app.integrations.pdd.playwright_connector import (
     PddPlaywrightConnector,
@@ -121,3 +122,67 @@ async def test_scan_continues_after_one_conversation_fails() -> None:
     connector._set_status.assert_awaited_once_with(
         ConnectorStatus.READY, "消息监听正常，1 个会话等待重试"
     )
+
+
+@pytest.mark.asyncio
+async def test_start_passes_shop_id_to_poll_task(monkeypatch, tmp_path) -> None:
+    """回归：start() 曾引用未定义的 _shop_id，导致专用浏览器永远无法启动。"""
+
+    class FakePage:
+        frames: list[object] = []
+
+        def is_closed(self) -> bool:
+            return False
+
+        async def expose_function(self, _name, _handler) -> None:
+            return None
+
+        async def add_init_script(self, _script) -> None:
+            return None
+
+        def on(self, _event, _handler) -> None:
+            return None
+
+        async def goto(self, _url, **_kwargs) -> None:
+            return None
+
+    class FakeContext:
+        def __init__(self) -> None:
+            self.pages = [FakePage()]
+
+    class FakeChromium:
+        async def launch_persistent_context(self, **_kwargs) -> FakeContext:
+            return FakeContext()
+
+    class FakeBrowserType:
+        chromium = FakeChromium()
+
+    class FakePlaywrightManager:
+        async def start(self) -> FakeBrowserType:
+            return FakeBrowserType()
+
+    monkeypatch.setattr(
+        "playwright.async_api.async_playwright", lambda: FakePlaywrightManager()
+    )
+    captured: dict[str, object] = {}
+
+    def fake_create_log_task(coroutine, **kwargs):
+        # 真实实现由事件循环接管协程；测试中显式关闭，避免未 await 告警。
+        coroutine.close()
+        captured.update(kwargs)
+        return Mock()
+
+    monkeypatch.setattr(
+        playwright_connector_module, "create_log_task", fake_create_log_task
+    )
+
+    connector = PddPlaywrightConnector(
+        shop_id="shop-under-test", profile_dir=tmp_path / "profile"
+    )
+    connector._is_login_required = AsyncMock(return_value=True)
+    connector._scan_once = AsyncMock(return_value=None)
+
+    await connector.start(on_message=AsyncMock(), on_status=AsyncMock())
+
+    assert captured["shop_id"] == "shop-under-test"
+    assert captured["name"] == "pdd-dom-poller"

@@ -82,11 +82,13 @@ class PddPlaywrightConnector(CustomerServiceConnector):
         self,
         settings: Settings | None = None,
         *,
+        shop_id: str | None = None,
         profile_dir: Path | None = None,
         window_slot: int = 0,
         require_identity: bool = False,
     ) -> None:
         self._settings = settings or get_settings()
+        self._shop_id = shop_id
         self._profile_dir = Path(profile_dir or self._settings.pdd_chrome_profile_dir)
         self._window_slot = max(0, window_slot)
         self._require_identity = require_identity
